@@ -1,11 +1,11 @@
 /**:
     ros__parameters:
-      app_name: "YourPSDK"
-      app_id: "YourID"
-      app_key: "YourAppKey"
-      app_license: "YourAppLicense"
-      developer_account: "YourDeveloperAccount"
-      baudrate: "921600"
+      app_name: "IVAQ Finder"
+      app_id: "157194"
+      app_key: "277ef255ddab87874f7426fafeb0e2e"
+      app_license: "Qae27A6m83ZVyewec1CYok/uBhET8GdDP/V5xkJME/C+gQYwa6abBnJd5ERn99Y+dhGuVKLCkRTqOuXeUk0Pn404fYdRkwClknuOnXLL3SzPvPgmd684W37TvA2W7HdLMTr0WaySlET/OyJQWlxMsyDPR304xIUswaroXj0G45sYWauZ8/kWxZWbDGS0YOAyJxmmeHpB1lmN/DSOS54nRVJ/xjNbpXwtntzD9kRfDotgMOobjs/+mbfN1NwP+jdvGjBFZJykOOAD6PZ3+pS+fR0OWt2sGSifWfKhy4EGHvrXjJCbiLpP0m0U1LFqvpOtG10eMymptDv4rm88PZsNUw=="
+      developer_account: "diego.sanchez@ivaq.es"
+      baudrate: "230400"
 
       num_of_initialization_retries: 3
 
@@ -35,13 +35,13 @@
         perception: false
 
       data_frequency: # Options are: 1, 5, 10, 50, 100, 200, 400 Hz
-        imu: 100
-        attitude: 100
-        acceleration: 50
-        velocity: 50
-        angular_velocity: 100
-        position: 50
-        altitude: 50
+        imu: 10
+        attitude: 10
+        acceleration: 10
+        velocity: 10
+        angular_velocity: 10
+        position: 10
+        altitude: 10
         gps_fused_position: 10
         gps_data: 5
         rtk_data: 5
