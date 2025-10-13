@@ -27,9 +27,9 @@
       # still be initialized but if case of failure, the node will continue to run.
       mandatory_modules:
         telemetry: true
-        flight_control: true
-        camera: false
-        gimbal: false
+        flight_control: false
+        camera: true
+        gimbal: true
         liveview: false
         hms: false
         perception: false
@@ -45,9 +45,9 @@
         gps_fused_position: 10
         gps_data: 5
         rtk_data: 5
-        magnetometer: 50
-        rc_channels_data: 1
-        gimbal_data: 1
+        magnetometer: 5
+        rc_channels_data: 5
+        gimbal_data: 5
         flight_status: 1
         battery_level: 1
         control_information: 1
