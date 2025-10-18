@@ -287,6 +287,21 @@ LiveviewModule::start_camera_stream(CameraImageCallback callback,
   else
   {
     RCLCPP_INFO(get_logger(), "Successfully started the camera streaming.");
+
+    T_DjiReturnCode intraframe_code = DjiLiveview_RequestIntraframeFrameData(
+        payload_index, camera_source);
+    if (intraframe_code != DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS)
+    {
+      RCLCPP_WARN(get_logger(),
+                  "Failed to request intraframe after stream start, error code: %ld.",
+                  intraframe_code);
+    }
+    else
+    {
+      RCLCPP_INFO(get_logger(),
+                  "Requested intraframe for payload index %d, camera source %d.",
+                  payload_index, camera_source);
+    }
     return true;
   }
 }
