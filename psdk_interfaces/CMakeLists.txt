@@ -70,6 +70,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "srv/CameraGetLaserRangingInfo.srv"
   "srv/CameraGetFileListInfo.srv"
   "srv/CameraSetupStreaming.srv"
+  "srv/CameraRequestIntraframe.srv"
   "srv/CameraFormatSdCard.srv"
   "srv/CameraGetSDStorageInfo.srv"
   "srv/GimbalSetMode.srv"

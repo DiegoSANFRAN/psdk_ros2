@@ -1,0 +1,5 @@
+# Request an intraframe (IDR) from the camera
+uint8 payload_index
+uint8 camera_source
+---
+bool success

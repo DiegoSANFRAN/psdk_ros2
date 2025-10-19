@@ -50,6 +50,11 @@ LiveviewModule::on_configure(const rclcpp_lifecycle::State &state)
       std::bind(&LiveviewModule::camera_setup_streaming_cb, this,
                 std::placeholders::_1, std::placeholders::_2),
       qos_profile_);
+  camera_request_intraframe_service_ = create_service<CameraRequestIntraframe>(
+      "psdk_ros2/camera_request_intraframe",
+      std::bind(&LiveviewModule::camera_request_intraframe_cb, this,
+                std::placeholders::_1, std::placeholders::_2),
+      qos_profile_);
   return CallbackReturn::SUCCESS;
 }
 
@@ -79,6 +84,7 @@ LiveviewModule::on_cleanup(const rclcpp_lifecycle::State &state)
   (void)state;
   RCLCPP_INFO(get_logger(), "Cleaning up LiveviewModule");
   camera_setup_streaming_service_.reset();
+  camera_request_intraframe_service_.reset();
   main_camera_stream_pub_.reset();
   fpv_camera_stream_pub_.reset();
   return CallbackReturn::SUCCESS;
@@ -254,6 +260,36 @@ LiveviewModule::camera_setup_streaming_cb(
   }
 }
 
+void
+LiveviewModule::camera_request_intraframe_cb(
+    const std::shared_ptr<CameraRequestIntraframe::Request> request,
+    const std::shared_ptr<CameraRequestIntraframe::Response> response)
+{
+  E_DjiLiveViewCameraPosition payload_index =
+      static_cast<E_DjiLiveViewCameraPosition>(request->payload_index);
+  E_DjiLiveViewCameraSource camera_source =
+      static_cast<E_DjiLiveViewCameraSource>(request->camera_source);
+
+  RCLCPP_INFO(get_logger(),
+              "Requesting intraframe for payload_index=%d, camera_source=%d",
+              payload_index, camera_source);
+
+  T_DjiReturnCode return_code = DjiLiveview_RequestIntraframeFrameData(
+      payload_index, camera_source);
+  
+  if (return_code != DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS)
+  {
+    RCLCPP_WARN(get_logger(),
+                "Intraframe request failed, error code: %ld", return_code);
+    response->success = false;
+  }
+  else
+  {
+    RCLCPP_INFO(get_logger(), "Intraframe request succeeded");
+    response->success = true;
+  }
+}
+
 bool
 LiveviewModule::start_camera_stream(CameraImageCallback callback,
                                     void *user_data,
@@ -288,19 +324,25 @@ LiveviewModule::start_camera_stream(CameraImageCallback callback,
   {
     RCLCPP_INFO(get_logger(), "Successfully started the camera streaming.");
 
-    T_DjiReturnCode intraframe_code = DjiLiveview_RequestIntraframeFrameData(
-        payload_index, camera_source);
-    if (intraframe_code != DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS)
+    // Request intraframe multiple times to ensure IDR delivery (especially for FPV)
+    for (int attempt = 0; attempt < 3; ++attempt)
     {
-      RCLCPP_WARN(get_logger(),
-                  "Failed to request intraframe after stream start, error code: %ld.",
-                  intraframe_code);
-    }
-    else
-    {
-      RCLCPP_INFO(get_logger(),
-                  "Requested intraframe for payload index %d, camera source %d.",
-                  payload_index, camera_source);
+      T_DjiReturnCode intraframe_code = DjiLiveview_RequestIntraframeFrameData(
+          payload_index, camera_source);
+      if (intraframe_code == DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS)
+      {
+        RCLCPP_INFO(get_logger(),
+                    "Requested intraframe (attempt %d) for payload index %d, camera source %d.",
+                    attempt + 1, payload_index, camera_source);
+      }
+      else
+      {
+        RCLCPP_WARN(get_logger(),
+                    "Intraframe request attempt %d failed, error code: %ld.",
+                    attempt + 1, intraframe_code);
+      }
+      // Brief delay between requests
+      std::this_thread::sleep_for(std::chrono::milliseconds(500));
     }
     return true;
   }

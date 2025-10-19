@@ -29,6 +29,7 @@
 #include <string>
 
 #include "psdk_interfaces/srv/camera_setup_streaming.hpp"
+#include "psdk_interfaces/srv/camera_request_intraframe.hpp"
 #include "psdk_wrapper/utils/psdk_wrapper_utils.hpp"
 
 namespace psdk_ros2
@@ -38,6 +39,7 @@ class LiveviewModule : public rclcpp_lifecycle::LifecycleNode
 {
  public:
   using CameraSetupStreaming = psdk_interfaces::srv::CameraSetupStreaming;
+  using CameraRequestIntraframe = psdk_interfaces::srv::CameraRequestIntraframe;
 
   /**
    * @brief Construct a new LiveviewModule object
@@ -122,6 +124,16 @@ class LiveviewModule : public rclcpp_lifecycle::LifecycleNode
       const std::shared_ptr<CameraSetupStreaming::Response> response);
 
   /**
+   * @brief Request an intraframe (IDR) from the camera
+   * @param request CameraRequestIntraframe service request with payload_index
+   * and camera_source
+   * @param response CameraRequestIntraframe service response
+   */
+  void camera_request_intraframe_cb(
+      const std::shared_ptr<CameraRequestIntraframe::Request> request,
+      const std::shared_ptr<CameraRequestIntraframe::Response> response);
+
+  /**
    * @brief Starts the camera streaming.
    * @param callback  function to be executed when a frame is received
    * @param user_data unused parameter
@@ -186,6 +198,8 @@ class LiveviewModule : public rclcpp_lifecycle::LifecycleNode
 
   rclcpp::Service<CameraSetupStreaming>::SharedPtr
       camera_setup_streaming_service_;
+  rclcpp::Service<CameraRequestIntraframe>::SharedPtr
+      camera_request_intraframe_service_;
   rclcpp_lifecycle::LifecyclePublisher<sensor_msgs::msg::Image>::SharedPtr
       main_camera_stream_pub_;
   rclcpp_lifecycle::LifecyclePublisher<sensor_msgs::msg::Image>::SharedPtr
