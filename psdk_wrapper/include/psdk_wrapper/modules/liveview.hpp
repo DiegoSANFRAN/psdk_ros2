@@ -213,6 +213,17 @@ class LiveviewModule : public rclcpp_lifecycle::LifecycleNode
   bool is_module_initialized_{false};
   E_DjiLiveViewCameraPosition payload_index_;
 
+  // Automatic keyframe request timer
+  rclcpp::TimerBase::SharedPtr keyframe_request_timer_;
+  double keyframe_request_interval_{0.0};  // 0 = disabled
+  bool auto_keyframe_enabled_{false};
+  bool is_streaming_active_{false};  // Track if streaming is actually running
+
+  /**
+   * @brief Timer callback to automatically request keyframes at regular intervals
+   */
+  void auto_request_keyframe_callback();
+
   mutable std::shared_mutex global_ptr_mutex_;
 };
 

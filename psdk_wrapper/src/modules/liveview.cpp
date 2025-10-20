@@ -41,6 +41,24 @@ LiveviewModule::on_configure(const rclcpp_lifecycle::State &state)
 {
   (void)state;
   RCLCPP_INFO(get_logger(), "Configuring LiveviewModule");
+  
+  // Declare and get keyframe request interval parameter
+  // Default 0.0 means disabled, 0.25 = 4Hz I-frames
+  this->declare_parameter("auto_keyframe_interval", 0.0);
+  keyframe_request_interval_ = this->get_parameter("auto_keyframe_interval").as_double();
+  auto_keyframe_enabled_ = (keyframe_request_interval_ > 0.0);
+  
+  if (auto_keyframe_enabled_)
+  {
+    RCLCPP_INFO(get_logger(), 
+                "🎯 Automatic keyframe requests ENABLED: %.2f Hz (every %.3f seconds)",
+                1.0 / keyframe_request_interval_, keyframe_request_interval_);
+  }
+  else
+  {
+    RCLCPP_INFO(get_logger(), "Automatic keyframe requests DISABLED (interval=0)");
+  }
+  
   main_camera_stream_pub_ = create_publisher<sensor_msgs::msg::Image>(
       "psdk_ros2/main_camera_stream", rclcpp::SensorDataQoS());
   fpv_camera_stream_pub_ = create_publisher<sensor_msgs::msg::Image>(
@@ -65,6 +83,16 @@ LiveviewModule::on_activate(const rclcpp_lifecycle::State &state)
   RCLCPP_INFO(get_logger(), "Activating LiveviewModule");
   main_camera_stream_pub_->on_activate();
   fpv_camera_stream_pub_->on_activate();
+  
+  // Note: Automatic keyframe timer will be started when streaming actually begins
+  // (see camera_setup_streaming_cb with start_stop=true)
+  if (auto_keyframe_enabled_)
+  {
+    RCLCPP_INFO(get_logger(), 
+                "Automatic keyframe requests configured at %.2f Hz - will start when streaming begins",
+                1.0 / keyframe_request_interval_);
+  }
+  
   return CallbackReturn::SUCCESS;
 }
 
@@ -73,6 +101,15 @@ LiveviewModule::on_deactivate(const rclcpp_lifecycle::State &state)
 {
   (void)state;
   RCLCPP_INFO(get_logger(), "Deactivating LiveviewModule");
+  
+  // Stop automatic keyframe request timer
+  if (keyframe_request_timer_)
+  {
+    keyframe_request_timer_->cancel();
+    keyframe_request_timer_.reset();
+    RCLCPP_INFO(get_logger(), "Stopped automatic keyframe request timer");
+  }
+  
   main_camera_stream_pub_->on_deactivate();
   fpv_camera_stream_pub_->on_deactivate();
   return CallbackReturn::SUCCESS;
@@ -235,6 +272,19 @@ LiveviewModule::camera_setup_streaming_cb(
 
     if (streaming_result)
     {
+      is_streaming_active_ = true;
+      
+      // Start automatic keyframe timer now that streaming is active
+      if (auto_keyframe_enabled_ && !keyframe_request_timer_)
+      {
+        keyframe_request_timer_ = this->create_wall_timer(
+            std::chrono::duration<double>(keyframe_request_interval_),
+            std::bind(&LiveviewModule::auto_request_keyframe_callback, this));
+        RCLCPP_INFO(get_logger(), 
+                    "🎯 Started automatic keyframe request timer: %.2f Hz (every %.3f seconds)",
+                    1.0 / keyframe_request_interval_, keyframe_request_interval_);
+      }
+      
       response->success = true;
       return;
     }
@@ -247,6 +297,16 @@ LiveviewModule::camera_setup_streaming_cb(
   else
   {
     RCLCPP_INFO(get_logger(), "Stopping camera streaming...");
+    
+    // Stop automatic keyframe timer when streaming stops
+    if (keyframe_request_timer_)
+    {
+      keyframe_request_timer_->cancel();
+      keyframe_request_timer_.reset();
+      RCLCPP_INFO(get_logger(), "Stopped automatic keyframe request timer");
+    }
+    is_streaming_active_ = false;
+    
     if (stop_main_camera_stream(payload_index_, selected_camera_source_))
     {
       response->success = true;
@@ -441,6 +501,33 @@ LiveviewModule::get_optical_frame_id()
     {
       return it.second;
     }
+  }
+}
+
+void
+LiveviewModule::auto_request_keyframe_callback()
+{
+  // Only request keyframes if module is initialized AND streaming is active
+  if (!is_module_initialized_ || !is_streaming_active_)
+  {
+    return;
+  }
+
+  // Request keyframe for the currently active camera stream
+  T_DjiReturnCode return_code = DjiLiveview_RequestIntraframeFrameData(
+      payload_index_, selected_camera_source_);
+  
+  if (return_code != DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS)
+  {
+    RCLCPP_DEBUG(get_logger(),
+                 "Auto keyframe request failed for payload=%d, source=%d, error=%ld",
+                 payload_index_, selected_camera_source_, return_code);
+  }
+  else
+  {
+    RCLCPP_DEBUG(get_logger(),
+                 "Auto keyframe requested for payload=%d, source=%d",
+                 payload_index_, selected_camera_source_);
   }
 }
 
