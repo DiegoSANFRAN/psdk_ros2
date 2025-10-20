@@ -27,6 +27,7 @@
 #include <sensor_msgs/msg/image.hpp>
 #include <shared_mutex>
 #include <string>
+#include <vector>
 
 #include "psdk_interfaces/srv/camera_setup_streaming.hpp"
 #include "psdk_interfaces/srv/camera_request_intraframe.hpp"
@@ -99,6 +100,11 @@ class LiveviewModule : public rclcpp_lifecycle::LifecycleNode
   bool deinit();
 
  private:
+    // Forward declarations to avoid including GStreamer headers in header file
+    typedef struct _GstElement GstElement;
+    typedef struct _GstPipeline GstPipeline;
+    typedef struct _GstBus GstBus;
+
   friend void c_publish_main_streaming_callback(CameraRGBImage img,
                                                 void* user_data);
   friend void c_publish_fpv_streaming_callback(CameraRGBImage img,
@@ -195,6 +201,31 @@ class LiveviewModule : public rclcpp_lifecycle::LifecycleNode
    * @return string with the optical frame id name
    */
   std::string get_optical_frame_id();
+
+  // ===== Direct RTP streaming (GStreamer) =====
+  // Parameters
+  bool direct_rtp_enabled_{false};
+  std::string rtp_host_{"127.0.0.1"};
+  int rtp_port_{5006};
+  unsigned int rtp_pt_{96};
+  unsigned int rtp_ssrc_{11111111};
+  int rtp_mtu_{1000};
+  bool direct_iframes_only_{false};
+
+  // Pipeline handles
+  GstPipeline* gst_pipeline_{nullptr};
+  GstElement* appsrc_{nullptr};
+  GstElement* h264parse_{nullptr};
+  GstElement* rtph264pay_{nullptr};
+  GstElement* udpsink_{nullptr};
+
+  // Manage pipeline lifecycle
+  bool start_rtp_pipeline();
+  void stop_rtp_pipeline();
+  bool push_h264_to_pipeline(const uint8_t* buffer, uint32_t buffer_length);
+
+  // Small H.264 helper: optional I-frames-only filtering
+  bool filter_iframes_only(const uint8_t* in, uint32_t len, std::vector<uint8_t>& out_annexb);
 
   rclcpp::Service<CameraSetupStreaming>::SharedPtr
       camera_setup_streaming_service_;

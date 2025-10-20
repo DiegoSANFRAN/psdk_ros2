@@ -32,6 +32,8 @@ find_package(tf2_ros REQUIRED)
 find_package(psdk_interfaces REQUIRED)
 find_package(std_srvs REQUIRED)
 find_package(nlohmann_json REQUIRED)
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(GSTREAMER REQUIRED gstreamer-1.0>=1.16 gstreamer-app-1.0>=1.16 gstreamer-pbutils-1.0>=1.16)
 
 # FetchContent module
 include(FetchContent)
@@ -128,6 +130,7 @@ endif ()
 
 # Include PSDK header files
 include_directories(${FFMPEG_INCLUDE_DIR})
+include_directories(${GSTREAMER_INCLUDE_DIRS})
 include_directories(${DJI_OSAL_PATH})
 include_directories(${DJI_HAL_PATH})
 include_directories(${DJI_STREAMING_PATH})
@@ -184,12 +187,14 @@ target_link_libraries(
   psdk_wrapper_libs
   ${PSDK_LIB}
   nlohmann_json::nlohmann_json
+  ${GSTREAMER_LIBRARIES}
 )
 
 target_link_libraries(
   psdk_wrapper_node
   psdk_wrapper_libs
   ${FFMPEG_LIBRARIES}
+  ${GSTREAMER_LIBRARIES}
   -lusb-1.0
   -lavcodec
   -lswscale

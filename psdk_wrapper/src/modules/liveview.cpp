@@ -18,6 +18,14 @@
 
 #include "psdk_wrapper/modules/liveview.hpp"
 
+// GStreamer headers (C linkage)
+extern "C" {
+#include <gst/gst.h>
+#include <gst/app/gstappsrc.h>
+}
+#include <vector>
+#include <cstring>
+
 namespace psdk_ros2
 {
 LiveviewModule::LiveviewModule(const std::string &name)
@@ -47,6 +55,22 @@ LiveviewModule::on_configure(const rclcpp_lifecycle::State &state)
   this->declare_parameter("auto_keyframe_interval", 0.25);
   keyframe_request_interval_ = this->get_parameter("auto_keyframe_interval").as_double();
   auto_keyframe_enabled_ = (keyframe_request_interval_ > 0.0);
+
+  // Direct RTP parameters
+  this->declare_parameter("direct_rtp.enabled", false);
+  this->declare_parameter("direct_rtp.host", std::string("127.0.0.1"));
+  this->declare_parameter("direct_rtp.port", 5006);
+  this->declare_parameter("direct_rtp.pt", 96);
+  this->declare_parameter("direct_rtp.ssrc", 11111111);
+  this->declare_parameter("direct_rtp.mtu", 1000);
+  this->declare_parameter("direct_rtp.iframes_only", false);
+  direct_rtp_enabled_ = this->get_parameter("direct_rtp.enabled").as_bool();
+  rtp_host_ = this->get_parameter("direct_rtp.host").as_string();
+  rtp_port_ = this->get_parameter("direct_rtp.port").as_int();
+  rtp_pt_ = this->get_parameter("direct_rtp.pt").as_int();
+  rtp_ssrc_ = this->get_parameter("direct_rtp.ssrc").as_int();
+  rtp_mtu_ = this->get_parameter("direct_rtp.mtu").as_int();
+  direct_iframes_only_ = this->get_parameter("direct_rtp.iframes_only").as_bool();
   
   if (auto_keyframe_enabled_)
   {
@@ -57,6 +81,22 @@ LiveviewModule::on_configure(const rclcpp_lifecycle::State &state)
   else
   {
     RCLCPP_INFO(get_logger(), "Automatic keyframe requests DISABLED (interval=0)");
+  }
+
+  if (direct_rtp_enabled_)
+  {
+    RCLCPP_INFO(get_logger(),
+                "✅ Direct RTP mode ENABLED → %s:%d, PT=%u, SSRC=%u, MTU=%d, I-frames only=%s",
+                rtp_host_.c_str(), rtp_port_, rtp_pt_, rtp_ssrc_, rtp_mtu_,
+                direct_iframes_only_ ? "true" : "false");
+    // Initialize GStreamer once (safe to call multiple times)
+    static bool gst_inited = false;
+    if (!gst_inited)
+    {
+      int argc = 0; char** argv = nullptr;
+      gst_init(&argc, &argv);
+      gst_inited = true;
+    }
   }
   
   main_camera_stream_pub_ = create_publisher<sensor_msgs::msg::Image>(
@@ -120,6 +160,8 @@ LiveviewModule::on_cleanup(const rclcpp_lifecycle::State &state)
 {
   (void)state;
   RCLCPP_INFO(get_logger(), "Cleaning up LiveviewModule");
+  // Ensure pipeline is stopped
+  stop_rtp_pipeline();
   camera_setup_streaming_service_.reset();
   camera_request_intraframe_service_.reset();
   main_camera_stream_pub_.reset();
@@ -197,14 +239,18 @@ c_LiveviewConvertH264ToRgbCallback(E_DjiLiveViewCameraPosition position,
     return global_liveview_ptr_->LiveviewConvertH264ToRgbCallback(
         position, buffer, buffer_length);
   }
-
+  // Direct RTP pipeline: push H264 frames directly to appsrc
+  if (global_liveview_ptr_->direct_rtp_enabled_ && global_liveview_ptr_->gst_pipeline_)
+  {
+    global_liveview_ptr_->push_h264_to_pipeline(buffer, buffer_length);
+    return;
+  }
+  // Fallback: publish on ROS2 topic
   if (global_liveview_ptr_->payload_index_ == DJI_LIVEVIEW_CAMERA_POSITION_FPV)
   {
-    return global_liveview_ptr_->publish_fpv_camera_images(buffer,
-                                                           buffer_length);
+    return global_liveview_ptr_->publish_fpv_camera_images(buffer, buffer_length);
   }
-  return global_liveview_ptr_->publish_main_camera_images(buffer,
-                                                          buffer_length);
+  return global_liveview_ptr_->publish_main_camera_images(buffer, buffer_length);
 }
 
 void
@@ -273,6 +319,15 @@ LiveviewModule::camera_setup_streaming_cb(
     if (streaming_result)
     {
       is_streaming_active_ = true;
+
+      // Start RTP pipeline if enabled
+      if (direct_rtp_enabled_)
+      {
+        if (!start_rtp_pipeline())
+        {
+          RCLCPP_ERROR(get_logger(), "Failed to start direct RTP pipeline; falling back to ROS2 topics");
+        }
+      }
       
       // Start automatic keyframe timer now that streaming is active
       if (auto_keyframe_enabled_ && !keyframe_request_timer_)
@@ -297,6 +352,8 @@ LiveviewModule::camera_setup_streaming_cb(
   else
   {
     RCLCPP_INFO(get_logger(), "Stopping camera streaming...");
+    // Stop RTP pipeline if running
+    stop_rtp_pipeline();
     
     // Stop automatic keyframe timer when streaming stops
     if (keyframe_request_timer_)
@@ -438,6 +495,7 @@ void
 LiveviewModule::publish_main_camera_images(const uint8_t *buffer,
                                            uint32_t buffer_length)
 {
+  if (direct_rtp_enabled_) return;  // suppressed in direct mode
   auto img = std::make_unique<sensor_msgs::msg::Image>();
   img->encoding = "h264";
   img->data = std::vector<uint8_t>(buffer, buffer + buffer_length);
@@ -450,6 +508,7 @@ void
 LiveviewModule::publish_fpv_camera_images(const uint8_t *buffer,
                                           uint32_t buffer_length)
 {
+  if (direct_rtp_enabled_) return;  // suppressed in direct mode
   auto img = std::make_unique<sensor_msgs::msg::Image>();
   img->encoding = "h264";
   img->data = std::vector<uint8_t>(buffer, buffer + buffer_length);
@@ -504,6 +563,192 @@ LiveviewModule::get_optical_frame_id()
   }
 }
 
+// ===================== GStreamer Direct RTP Impl =====================
+bool LiveviewModule::start_rtp_pipeline()
+{
+  if (!direct_rtp_enabled_) return false;
+  if (gst_pipeline_) return true; // already running
+
+  // Build pipeline in code: appsrc ! h264parse ! rtph264pay ! udpsink
+  GstElement* pipeline = gst_pipeline_new("psdk_rtp_pipeline");
+  if (!pipeline)
+  {
+    RCLCPP_ERROR(get_logger(), "Failed to create GStreamer pipeline");
+    return false;
+  }
+  GstElement* appsrc = gst_element_factory_make("appsrc", "src");
+  GstElement* parse = gst_element_factory_make("h264parse", "parse");
+  GstElement* pay = gst_element_factory_make("rtph264pay", "pay");
+  GstElement* sink = gst_element_factory_make("udpsink", "sink");
+  if (!appsrc || !parse || !pay || !sink)
+  {
+    RCLCPP_ERROR(get_logger(), "Failed to create one or more GStreamer elements");
+    if (pipeline) gst_object_unref(pipeline);
+    return false;
+  }
+
+  // Configure elements
+  // appsrc: live, time, block=false to avoid backpressure stalls
+  g_object_set(G_OBJECT(appsrc),
+               "is-live", TRUE,
+               "format", GST_FORMAT_TIME,
+               "block", FALSE,
+               nullptr);
+  // h264parse: prefer AU alignment and allow passthrough
+  g_object_set(G_OBJECT(parse),
+               "disable-passthrough", FALSE,
+               "alignment", 1 /* au */, // GST_H264_PARSE_ALIGNMENT_AU
+               nullptr);
+  // rtph264pay: pt, ssrc, mtu, config-interval=-1 to send SPS/PPS with every keyframe
+  g_object_set(G_OBJECT(pay),
+               "pt", rtp_pt_,
+               "ssrc", rtp_ssrc_,
+               "mtu", rtp_mtu_,
+               "config-interval", -1,
+               nullptr);
+  // udpsink: host/port, sync/async false
+  g_object_set(G_OBJECT(sink),
+               "host", rtp_host_.c_str(),
+               "port", rtp_port_,
+               "sync", FALSE,
+               "async", FALSE,
+               nullptr);
+
+  gst_bin_add_many(GST_BIN(pipeline), appsrc, parse, pay, sink, nullptr);
+  if (!gst_element_link_many(appsrc, parse, pay, sink, nullptr))
+  {
+    RCLCPP_ERROR(get_logger(), "Failed to link GStreamer elements");
+    gst_object_unref(pipeline);
+    return false;
+  }
+
+  GstStateChangeReturn ret = gst_element_set_state(pipeline, GST_STATE_PLAYING);
+  if (ret == GST_STATE_CHANGE_FAILURE)
+  {
+    RCLCPP_ERROR(get_logger(), "Failed to set pipeline to PLAYING");
+    gst_object_unref(pipeline);
+    return false;
+  }
+
+  gst_pipeline_ = GST_PIPELINE(pipeline);
+  appsrc_ = appsrc;
+  h264parse_ = parse;
+  rtph264pay_ = pay;
+  udpsink_ = sink;
+  RCLCPP_INFO(get_logger(), "Direct RTP pipeline started: %s:%d (PT=%u, SSRC=%u, MTU=%d)",
+              rtp_host_.c_str(), rtp_port_, rtp_pt_, rtp_ssrc_, rtp_mtu_);
+  return true;
+}
+
+void LiveviewModule::stop_rtp_pipeline()
+{
+  if (!gst_pipeline_) return;
+  gst_element_set_state(GST_ELEMENT(gst_pipeline_), GST_STATE_NULL);
+  gst_object_unref(gst_pipeline_);
+  gst_pipeline_ = nullptr;
+  appsrc_ = nullptr;
+  h264parse_ = nullptr;
+  rtph264pay_ = nullptr;
+  udpsink_ = nullptr;
+}
+
+// Very small NAL scan to detect IDR/SPS/PPS and optionally rebuild Annex-B with only allowed types
+bool LiveviewModule::filter_iframes_only(const uint8_t* in, uint32_t len, std::vector<uint8_t>& out)
+{
+  // Accept both Annex-B and AVCC; rebuild Annex-B with only {5,6,7,8,9}
+  const uint8_t* p = in; const uint8_t* end = in + len;
+  auto push_sc = [&out]() { const uint8_t sc[4] = {0,0,0,1}; out.insert(out.end(), sc, sc+4); };
+  bool wrote = false;
+
+  // First detect Annex-B start codes quickly
+  bool saw_start = false;
+  for (size_t i = 0; i + 3 < len; ++i) {
+    if ((in[i] == 0 && in[i+1] == 0 && in[i+2] == 1) ||
+        (i + 4 < len && in[i] == 0 && in[i+1] == 0 && in[i+2] == 0 && in[i+3] == 1)) {
+      saw_start = true; break;
+    }
+  }
+
+  if (saw_start) {
+    // Annex-B: iterate start-code delimited units
+    size_t i = 0;
+    while (i + 3 < len) {
+      size_t sc_len = 0;
+      if (i + 4 <= len && in[i]==0 && in[i+1]==0 && in[i+2]==0 && in[i+3]==1) { sc_len = 4; }
+      else if (i + 3 <= len && in[i]==0 && in[i+1]==0 && in[i+2]==1) { sc_len = 3; }
+      if (!sc_len) { ++i; continue; }
+      size_t nal_start = i + sc_len;
+      size_t j = nal_start;
+      while (j + 3 < len && !(in[j]==0 && in[j+1]==0 && ((in[j+2]==1) || (j+3<len && in[j+2]==0 && in[j+3]==1)))) {
+        ++j;
+      }
+      if (nal_start < len) {
+        uint8_t nal_type = in[nal_start] & 0x1F;
+        if (nal_type==5 || nal_type==6 || nal_type==7 || nal_type==8 || nal_type==9) {
+          push_sc(); out.insert(out.end(), in+nal_start, in+std::min(j, (size_t)len)); wrote = true;
+        }
+      }
+      i = j;
+    }
+    return wrote;
+  } else {
+    // AVCC: length-prefixed (4 bytes)
+    size_t i = 0;
+    while (i + 4 <= len) {
+      uint32_t n = (in[i]<<24) | (in[i+1]<<16) | (in[i+2]<<8) | (in[i+3]);
+      if (n == 0 || i + 4 + n > len) break;
+      size_t start = i + 4;
+      uint8_t nal_type = in[start] & 0x1F;
+      if (nal_type==5 || nal_type==6 || nal_type==7 || nal_type==8 || nal_type==9) {
+        push_sc(); out.insert(out.end(), in+start, in+start+n); wrote = true;
+      }
+      i += 4 + n;
+    }
+    return wrote;
+  }
+}
+
+bool LiveviewModule::push_h264_to_pipeline(const uint8_t* buffer, uint32_t buffer_length)
+{
+  if (!gst_pipeline_ || !appsrc_) return false;
+
+  std::vector<uint8_t> bytes;
+  const uint8_t* data = buffer;
+  uint32_t len = buffer_length;
+  if (direct_iframes_only_)
+  {
+    bytes.reserve(len + 64);
+    bool ok = filter_iframes_only(buffer, buffer_length, bytes);
+    if (!ok) return true; // nothing to push for non-IDR frames
+    data = bytes.data();
+    len = static_cast<uint32_t>(bytes.size());
+  }
+
+  GstBuffer* gstbuf = gst_buffer_new_allocate(nullptr, len, nullptr);
+  if (!gstbuf) return false;
+  GstMapInfo map;
+  if (!gst_buffer_map(gstbuf, &map, GST_MAP_WRITE))
+  {
+    gst_buffer_unref(gstbuf);
+    return false;
+  }
+  memcpy(map.data, data, len);
+  gst_buffer_unmap(gstbuf, &map);
+
+  // Timestamp buffer with current clock; we don't have per-frame timestamps from DJI API here
+  GstClockTime now = gst_util_uint64_scale(this->get_clock()->now().nanoseconds(), 1, 1);
+  GST_BUFFER_PTS(gstbuf) = now;
+  GST_BUFFER_DTS(gstbuf) = GST_CLOCK_TIME_NONE;
+  GST_BUFFER_DURATION(gstbuf) = GST_CLOCK_TIME_NONE;
+
+  GstFlowReturn ret = gst_app_src_push_buffer(GST_APP_SRC(appsrc_), gstbuf);
+  if (ret != GST_FLOW_OK)
+  {
+    RCLCPP_DEBUG(get_logger(), "appsrc push returned %d", ret);
+    return false;
+  }
+  return true;
+}
 void
 LiveviewModule::auto_request_keyframe_callback()
 {
