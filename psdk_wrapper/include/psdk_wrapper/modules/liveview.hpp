@@ -19,6 +19,10 @@
 
 #include <dji_liveview.h>
 
+// Forward declare GStreamer types to avoid heavy includes in header
+typedef struct _GstElement GstElement;
+typedef struct _GstPipeline GstPipeline;
+
 #include <dji_camera_stream_decoder.hpp>  //NOLINT
 #include <map>
 #include <memory>
@@ -100,11 +104,6 @@ class LiveviewModule : public rclcpp_lifecycle::LifecycleNode
   bool deinit();
 
  private:
-    // Forward declarations to avoid including GStreamer headers in header file
-    typedef struct _GstElement GstElement;
-    typedef struct _GstPipeline GstPipeline;
-    typedef struct _GstBus GstBus;
-
   friend void c_publish_main_streaming_callback(CameraRGBImage img,
                                                 void* user_data);
   friend void c_publish_fpv_streaming_callback(CameraRGBImage img,
