@@ -52,7 +52,7 @@ LiveviewModule::on_configure(const rclcpp_lifecycle::State &state)
   
   // Declare and get keyframe request interval parameter
   // Default 0.0 means disabled, 0.25 = 4Hz I-frames
-  this->declare_parameter("auto_keyframe_interval", 0.5);
+  this->declare_parameter("auto_keyframe_interval", 2.0);
   keyframe_request_interval_ = this->get_parameter("auto_keyframe_interval").as_double();
   auto_keyframe_enabled_ = (keyframe_request_interval_ > 0.0);
 
