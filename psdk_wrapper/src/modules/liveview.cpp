@@ -522,6 +522,8 @@ LiveviewModule::publish_main_camera_images(CameraRGBImage rgb_img,
                                            void *user_data)
 {
   (void)user_data;
+  // Suppress RGB topic publishing when direct RTP mode is enabled
+  if (direct_rtp_enabled_) return;
   auto img = std::make_unique<sensor_msgs::msg::Image>();
   img->height = rgb_img.height;
   img->width = rgb_img.width;
@@ -539,6 +541,8 @@ LiveviewModule::publish_fpv_camera_images(CameraRGBImage rgb_img,
                                           void *user_data)
 {
   (void)user_data;
+  // Suppress RGB topic publishing when direct RTP mode is enabled
+  if (direct_rtp_enabled_) return;
   auto img = std::make_unique<sensor_msgs::msg::Image>();
   img->height = rgb_img.height;
   img->width = rgb_img.width;
