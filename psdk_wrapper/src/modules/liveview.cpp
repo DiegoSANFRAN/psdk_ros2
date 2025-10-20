@@ -62,7 +62,7 @@ LiveviewModule::on_configure(const rclcpp_lifecycle::State &state)
   this->declare_parameter("direct_rtp.port", 5006);
   this->declare_parameter("direct_rtp.pt", 96);
   this->declare_parameter("direct_rtp.ssrc", 11111111);
-  this->declare_parameter("direct_rtp.mtu", 1000);
+  this->declare_parameter("direct_rtp.mtu", 1400);  // Increased from 1000 for efficiency
   this->declare_parameter("direct_rtp.iframes_only", false);
   direct_rtp_enabled_ = this->get_parameter("direct_rtp.enabled").as_bool();
   rtp_host_ = this->get_parameter("direct_rtp.host").as_string();
@@ -582,44 +582,59 @@ bool LiveviewModule::start_rtp_pipeline()
   }
   GstElement* appsrc = gst_element_factory_make("appsrc", "src");
   GstElement* parse = gst_element_factory_make("h264parse", "parse");
+  GstElement* queue = gst_element_factory_make("queue", "queue");
   GstElement* pay = gst_element_factory_make("rtph264pay", "pay");
   GstElement* sink = gst_element_factory_make("udpsink", "sink");
-  if (!appsrc || !parse || !pay || !sink)
+  if (!appsrc || !parse || !queue || !pay || !sink)
   {
     RCLCPP_ERROR(get_logger(), "Failed to create one or more GStreamer elements");
     if (pipeline) gst_object_unref(pipeline);
     return false;
   }
+  
+  // Configure queue: small buffer, leaky=downstream (drop old frames), no blocking
+  g_object_set(G_OBJECT(queue),
+               "max-size-buffers", 5,  // Only keep 5 frames
+               "max-size-bytes", 0,
+               "max-size-time", 0,
+               "leaky", 2,  // GST_QUEUE_LEAK_DOWNSTREAM (drop oldest)
+               "flush-on-eos", TRUE,
+               nullptr);
 
   // Configure elements
-  // appsrc: live, time, block=false to avoid backpressure stalls
+  // appsrc: live, time, block=false, emit-signals=false, max-bytes=0 (unlimited but fast drops)
   g_object_set(G_OBJECT(appsrc),
                "is-live", TRUE,
                "format", GST_FORMAT_TIME,
                "block", FALSE,
+               "emit-signals", FALSE,
+               "max-bytes", 0,
                nullptr);
   // h264parse: prefer AU alignment and allow passthrough
   g_object_set(G_OBJECT(parse),
                "disable-passthrough", FALSE,
                "alignment", 1 /* au */, // GST_H264_PARSE_ALIGNMENT_AU
                nullptr);
-  // rtph264pay: pt, ssrc, mtu, config-interval=-1 to send SPS/PPS with every keyframe
+  // rtph264pay: pt, ssrc, mtu, config-interval=-1, aggregate-mode=zero-latency
   g_object_set(G_OBJECT(pay),
                "pt", rtp_pt_,
                "ssrc", rtp_ssrc_,
                "mtu", rtp_mtu_,
                "config-interval", -1,
+               "aggregate-mode", 1, // zero-latency (don't wait to aggregate)
                nullptr);
-  // udpsink: host/port, sync/async false
+  // udpsink: host/port, sync/async false, max-bitrate=0 (unlimited), max-lateness=-1 (drop late)
   g_object_set(G_OBJECT(sink),
                "host", rtp_host_.c_str(),
                "port", rtp_port_,
                "sync", FALSE,
                "async", FALSE,
+               "max-bitrate", 0,
+               "max-lateness", -1,
                nullptr);
 
-  gst_bin_add_many(GST_BIN(pipeline), appsrc, parse, pay, sink, nullptr);
-  if (!gst_element_link_many(appsrc, parse, pay, sink, nullptr))
+  gst_bin_add_many(GST_BIN(pipeline), appsrc, parse, queue, pay, sink, nullptr);
+  if (!gst_element_link_many(appsrc, parse, queue, pay, sink, nullptr))
   {
     RCLCPP_ERROR(get_logger(), "Failed to link GStreamer elements");
     gst_object_unref(pipeline);
