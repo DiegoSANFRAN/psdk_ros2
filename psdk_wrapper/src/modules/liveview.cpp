@@ -57,7 +57,7 @@ LiveviewModule::on_configure(const rclcpp_lifecycle::State &state)
   auto_keyframe_enabled_ = (keyframe_request_interval_ > 0.0);
 
   // Direct RTP parameters
-  this->declare_parameter("direct_rtp.enabled", false);
+  this->declare_parameter("direct_rtp.enabled", true);
   this->declare_parameter("direct_rtp.host", std::string("127.0.0.1"));
   this->declare_parameter("direct_rtp.port", 5006);
   this->declare_parameter("direct_rtp.pt", 96);
