@@ -32,6 +32,7 @@ typedef struct _GstPipeline GstPipeline;
 #include <shared_mutex>
 #include <string>
 #include <vector>
+#include <chrono>
 
 #include "psdk_interfaces/srv/camera_setup_streaming.hpp"
 #include "psdk_interfaces/srv/camera_request_intraframe.hpp"
@@ -210,6 +211,9 @@ class LiveviewModule : public rclcpp_lifecycle::LifecycleNode
   unsigned int rtp_ssrc_{11111111};
   int rtp_mtu_{1000};
   bool direct_iframes_only_{false};
+    // Direct RTP FPS limiting
+    double direct_rtp_fps_{10.0};
+    std::chrono::steady_clock::time_point last_frame_push_time_{std::chrono::steady_clock::now()};
 
   // Pipeline handles
   GstPipeline* gst_pipeline_{nullptr};

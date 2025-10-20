@@ -64,6 +64,7 @@ LiveviewModule::on_configure(const rclcpp_lifecycle::State &state)
   this->declare_parameter("direct_rtp.ssrc", 11111111);
   this->declare_parameter("direct_rtp.mtu", 1400);  // Increased from 1000 for efficiency
   this->declare_parameter("direct_rtp.iframes_only", false);
+  this->declare_parameter("direct_rtp.fps", 10.0);
   direct_rtp_enabled_ = this->get_parameter("direct_rtp.enabled").as_bool();
   rtp_host_ = this->get_parameter("direct_rtp.host").as_string();
   rtp_port_ = this->get_parameter("direct_rtp.port").as_int();
@@ -71,6 +72,7 @@ LiveviewModule::on_configure(const rclcpp_lifecycle::State &state)
   rtp_ssrc_ = this->get_parameter("direct_rtp.ssrc").as_int();
   rtp_mtu_ = this->get_parameter("direct_rtp.mtu").as_int();
   direct_iframes_only_ = this->get_parameter("direct_rtp.iframes_only").as_bool();
+  direct_rtp_fps_ = this->get_parameter("direct_rtp.fps").as_double();
   
   if (auto_keyframe_enabled_)
   {
@@ -731,6 +733,22 @@ bool LiveviewModule::push_h264_to_pipeline(const uint8_t* buffer, uint32_t buffe
 {
   if (!gst_pipeline_ || !appsrc_) return false;
 
+  // Enforce FPS limit by skipping frames that arrive too quickly
+  if (direct_rtp_fps_ > 0.0)
+  {
+    double min_interval = 1.0 / direct_rtp_fps_;
+    auto now = std::chrono::steady_clock::now();
+    std::chrono::duration<double> elapsed = now - last_frame_push_time_;
+    if (elapsed.count() < min_interval)
+    {
+      // Skip this frame silently (not an error)
+      RCLCPP_DEBUG(get_logger(), "Skipping frame: elapsed=%.3fs < min_interval=%.3fs",
+                   elapsed.count(), min_interval);
+      return true;
+    }
+    // Otherwise continue and push; we'll update last_frame_push_time_ after successful push
+  }
+
   std::vector<uint8_t> bytes;
   const uint8_t* data = buffer;
   uint32_t len = buffer_length;
@@ -766,6 +784,8 @@ bool LiveviewModule::push_h264_to_pipeline(const uint8_t* buffer, uint32_t buffe
     RCLCPP_DEBUG(get_logger(), "appsrc push returned %d", ret);
     return false;
   }
+  // Successful push; update last pushed time
+  last_frame_push_time_ = std::chrono::steady_clock::now();
   return true;
 }
 void
