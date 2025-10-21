@@ -51,12 +51,13 @@ LiveviewModule::on_configure(const rclcpp_lifecycle::State &state)
   RCLCPP_INFO(get_logger(), "Configuring LiveviewModule");
   
   // Declare and get keyframe request interval parameter  
-  // For GOP-aware dropping at 10fps with optimal bandwidth:
-  // - Keyframe every 0.5s = 2 GOPs/second (fewer I-frames = lower bandwidth)
-  // - Each GOP contains ~15 frames (30fps / 2 GOPs/s)
-  // - Accept EVERY 3rd GOP → 0.67 GOPs/s × 15 frames = 10fps
-  // - Bandwidth: ~1.3 Mbps (vs ~2.0 Mbps with 0.2s interval)
-  this->declare_parameter("auto_keyframe_interval", 0.5);
+  // For GOP-aware dropping at 10fps - SMOOTHER but higher bandwidth:
+  // - Keyframe every 0.2s = 5 GOPs/second (smaller GOPs = smoother playback)
+  // - Each GOP contains ~6 frames (30fps / 5 GOPs/s)
+  // - Accept EVERY 3rd GOP → 1.67 GOPs/s × 6 frames = 10fps
+  // - Bandwidth: ~2.0 Mbps (more I-frames but smoother)
+  // Trade-off: 54% more bandwidth vs 0.5s, but much smoother playback
+  this->declare_parameter("auto_keyframe_interval", 0.2);
   keyframe_request_interval_ = this->get_parameter("auto_keyframe_interval").as_double();
   auto_keyframe_enabled_ = (keyframe_request_interval_ > 0.0);
 
@@ -68,10 +69,11 @@ LiveviewModule::on_configure(const rclcpp_lifecycle::State &state)
   this->declare_parameter("direct_rtp.ssrc", 11111111);
   this->declare_parameter("direct_rtp.mtu", 1400);  // Increased from 1000 for efficiency
   // GOP-aware dropping: accept/reject entire GOPs (no artifacts, clean playback)
-  // With keyframe_interval=0.5s (2 GOPs/s) and fps=10.0:
-  // - Each GOP has ~15 frames (30fps / 2 GOPs/s)
-  // - Accept every 3rd GOP → 0.67 GOPs/s × 15 frames = ~10fps
-  // - Bandwidth optimized: fewer I-frames (0.67/s) = ~1.3 Mbps (vs ~2 Mbps with 0.2s)
+  // With keyframe_interval=0.2s (5 GOPs/s) and fps=10.0:
+  // - Each GOP has ~6 frames (30fps / 5 GOPs/s)
+  // - Accept every 3rd GOP → 1.67 GOPs/s × 6 frames = ~10fps
+  // - Bandwidth: ~2.0 Mbps (more I-frames = higher BW but SMOOTHER playback)
+  // - Choppiness reduced: 0.2s gaps vs 0.5s gaps
   this->declare_parameter("direct_rtp.iframes_only", false);
   this->declare_parameter("direct_rtp.fps", 10.0);  // Target output FPS (GOP-aware dropping)
   direct_rtp_enabled_ = this->get_parameter("direct_rtp.enabled").as_bool();
