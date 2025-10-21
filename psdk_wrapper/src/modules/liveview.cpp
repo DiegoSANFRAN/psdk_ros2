@@ -64,7 +64,7 @@ LiveviewModule::on_configure(const rclcpp_lifecycle::State &state)
   this->declare_parameter("direct_rtp.ssrc", 11111111);
   this->declare_parameter("direct_rtp.mtu", 1400);  // Increased from 1000 for efficiency
   this->declare_parameter("direct_rtp.iframes_only", false);
-  this->declare_parameter("direct_rtp.fps", 5.0);
+  this->declare_parameter("direct_rtp.fps", 10.0);
   direct_rtp_enabled_ = this->get_parameter("direct_rtp.enabled").as_bool();
   rtp_host_ = this->get_parameter("direct_rtp.host").as_string();
   rtp_port_ = this->get_parameter("direct_rtp.port").as_int();
@@ -733,20 +733,52 @@ bool LiveviewModule::push_h264_to_pipeline(const uint8_t* buffer, uint32_t buffe
 {
   if (!gst_pipeline_ || !appsrc_) return false;
 
-  // Enforce FPS limit by skipping frames that arrive too quickly
+  // Detect if this frame contains an I-frame (IDR NAL unit type 5)
+  bool is_keyframe = false;
+  for (size_t i = 0; i + 4 < buffer_length; ++i) {
+    if ((buffer[i] == 0 && buffer[i+1] == 0 && buffer[i+2] == 1) ||
+        (i + 1 < buffer_length && buffer[i] == 0 && buffer[i+1] == 0 && buffer[i+2] == 0 && buffer[i+3] == 1)) {
+      size_t nal_start = (buffer[i+2] == 1) ? i+3 : i+4;
+      if (nal_start < buffer_length && (buffer[nal_start] & 0x1F) == 5) {
+        is_keyframe = true;
+        break;
+      }
+    }
+  }
+
+  // GOP-aware FPS limiting: decide on keyframes, apply to entire GOP
   if (direct_rtp_fps_ > 0.0)
   {
-    double min_interval = 1.0 / direct_rtp_fps_;
-    auto now = std::chrono::steady_clock::now();
-    std::chrono::duration<double> elapsed = now - last_frame_push_time_;
-    if (elapsed.count() < min_interval)
+    if (is_keyframe)
     {
-      // Skip this frame silently (not an error)
-      RCLCPP_DEBUG(get_logger(), "Skipping frame: elapsed=%.3fs < min_interval=%.3fs",
-                   elapsed.count(), min_interval);
+      // New GOP starts - decide whether to keep or skip
+      double min_interval = 1.0 / direct_rtp_fps_;
+      auto now = std::chrono::steady_clock::now();
+      std::chrono::duration<double> elapsed = now - last_frame_push_time_;
+      
+      if (elapsed.count() < min_interval)
+      {
+        // Skip this entire GOP
+        skip_current_gop_ = true;
+        RCLCPP_DEBUG(get_logger(), "⏭️  Skipping GOP: elapsed=%.3fs < %.3fs",
+                     elapsed.count(), min_interval);
+        return true;
+      }
+      else
+      {
+        // Keep this GOP
+        skip_current_gop_ = false;
+        last_frame_push_time_ = now;
+        RCLCPP_DEBUG(get_logger(), "✅ Accepting GOP (keyframe after %.3fs)", elapsed.count());
+      }
+    }
+    else if (skip_current_gop_)
+    {
+      // P-frame belonging to skipped GOP
+      RCLCPP_DEBUG(get_logger(), "⏭️  Skipping P-frame (part of skipped GOP)");
       return true;
     }
-    // Otherwise continue and push; we'll update last_frame_push_time_ after successful push
+    // else: P-frame from accepted GOP - pass through
   }
 
   std::vector<uint8_t> bytes;
@@ -784,8 +816,6 @@ bool LiveviewModule::push_h264_to_pipeline(const uint8_t* buffer, uint32_t buffe
     RCLCPP_DEBUG(get_logger(), "appsrc push returned %d", ret);
     return false;
   }
-  // Successful push; update last pushed time
-  last_frame_push_time_ = std::chrono::steady_clock::now();
   return true;
 }
 void
