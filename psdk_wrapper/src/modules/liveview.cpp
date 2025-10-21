@@ -52,7 +52,7 @@ LiveviewModule::on_configure(const rclcpp_lifecycle::State &state)
   
   // Declare and get keyframe request interval parameter
   // Default 0.0 means disabled, 0.25 = 4Hz I-frames
-  this->declare_parameter("auto_keyframe_interval", 2.0);
+  this->declare_parameter("auto_keyframe_interval", 1.0);
   keyframe_request_interval_ = this->get_parameter("auto_keyframe_interval").as_double();
   auto_keyframe_enabled_ = (keyframe_request_interval_ > 0.0);
 
@@ -64,7 +64,7 @@ LiveviewModule::on_configure(const rclcpp_lifecycle::State &state)
   this->declare_parameter("direct_rtp.ssrc", 11111111);
   this->declare_parameter("direct_rtp.mtu", 1400);  // Increased from 1000 for efficiency
   this->declare_parameter("direct_rtp.iframes_only", false);
-  this->declare_parameter("direct_rtp.fps", 10.0);
+  this->declare_parameter("direct_rtp.fps", 5.0);
   direct_rtp_enabled_ = this->get_parameter("direct_rtp.enabled").as_bool();
   rtp_host_ = this->get_parameter("direct_rtp.host").as_string();
   rtp_port_ = this->get_parameter("direct_rtp.port").as_int();
