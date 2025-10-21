@@ -211,10 +211,17 @@ class LiveviewModule : public rclcpp_lifecycle::LifecycleNode
   unsigned int rtp_ssrc_{11111111};
   int rtp_mtu_{1000};
   bool direct_iframes_only_{false};
-  // Direct RTP FPS limiting with GOP awareness
+  // Direct RTP FPS limiting with frame-level dropping
   double direct_rtp_fps_{10.0};
   std::chrono::steady_clock::time_point last_frame_push_time_{std::chrono::steady_clock::now()};
   bool skip_current_gop_{false};  // Track if we're skipping the current GOP
+  uint64_t frame_counter_{0};     // Frame counter for modulo-based dropping
+  // Telemetry for monitoring frame dropping
+  uint64_t frames_received_{0};
+  uint64_t frames_pushed_{0};
+  uint64_t gops_received_{0};
+  uint64_t gops_pushed_{0};
+  std::chrono::steady_clock::time_point last_stats_print_{std::chrono::steady_clock::now()};
 
   // Pipeline handles
   GstPipeline* gst_pipeline_{nullptr};

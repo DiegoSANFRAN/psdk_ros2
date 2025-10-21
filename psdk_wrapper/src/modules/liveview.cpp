@@ -50,9 +50,13 @@ LiveviewModule::on_configure(const rclcpp_lifecycle::State &state)
   (void)state;
   RCLCPP_INFO(get_logger(), "Configuring LiveviewModule");
   
-  // Declare and get keyframe request interval parameter
-  // Default 0.0 means disabled, 0.25 = 4Hz I-frames
-  this->declare_parameter("auto_keyframe_interval", 2.0);
+  // Declare and get keyframe request interval parameter  
+  // For GOP-aware dropping at 10fps:
+  // - Keyframe every 0.1s = 10 GOPs/second
+  // - Each GOP contains ~3 frames (30fps / 10 GOPs/s)
+  // - Accept ALL GOPs → 10 GOPs/s × 3 frames = 30fps
+  // - Accept EVERY 3rd GOP → 3.33 GOPs/s × 3 frames = 10fps
+  this->declare_parameter("auto_keyframe_interval", 0.2);
   keyframe_request_interval_ = this->get_parameter("auto_keyframe_interval").as_double();
   auto_keyframe_enabled_ = (keyframe_request_interval_ > 0.0);
 
@@ -63,8 +67,12 @@ LiveviewModule::on_configure(const rclcpp_lifecycle::State &state)
   this->declare_parameter("direct_rtp.pt", 96);
   this->declare_parameter("direct_rtp.ssrc", 11111111);
   this->declare_parameter("direct_rtp.mtu", 1400);  // Increased from 1000 for efficiency
+  // GOP-aware dropping: accept/reject entire GOPs (no artifacts, clean playback)
+  // With keyframe_interval=0.1s (10 GOPs/s) and fps=10.0:
+  // - Each GOP has ~3 frames (30fps / 10 GOPs/s)
+  // - Accept every 3rd GOP → 3.33 GOPs/s × 3 frames = ~10fps
   this->declare_parameter("direct_rtp.iframes_only", false);
-  this->declare_parameter("direct_rtp.fps", 5.0);
+  this->declare_parameter("direct_rtp.fps", 10.0);  // Target output FPS (GOP-aware dropping)
   direct_rtp_enabled_ = this->get_parameter("direct_rtp.enabled").as_bool();
   rtp_host_ = this->get_parameter("direct_rtp.host").as_string();
   rtp_port_ = this->get_parameter("direct_rtp.port").as_int();
@@ -88,9 +96,34 @@ LiveviewModule::on_configure(const rclcpp_lifecycle::State &state)
   if (direct_rtp_enabled_)
   {
     RCLCPP_INFO(get_logger(),
-                "✅ Direct RTP mode ENABLED → %s:%d, PT=%u, SSRC=%u, MTU=%d, I-frames only=%s",
+                "✅ Direct RTP mode ENABLED → %s:%d, PT=%u, SSRC=%u, MTU=%d, I-frames only=%s, Target FPS=%.1f",
                 rtp_host_.c_str(), rtp_port_, rtp_pt_, rtp_ssrc_, rtp_mtu_,
-                direct_iframes_only_ ? "true" : "false");
+                direct_iframes_only_ ? "true" : "false", direct_rtp_fps_);
+    if (direct_iframes_only_)
+    {
+      RCLCPP_WARN(get_logger(), 
+                  "⚠️  I-FRAMES-ONLY MODE: Bandwidth will be 10-30x higher than P-frame mode!");
+      RCLCPP_INFO(get_logger(),
+                  "   All P-frames will be dropped, only I-frames sent at %.1f fps", direct_rtp_fps_);
+    }
+    else
+    {
+      double gops_per_sec = 1.0 / keyframe_request_interval_;
+      double frames_per_gop = 30.0 / gops_per_sec;
+      double gop_accept_rate = direct_rtp_fps_ / 30.0;  // fraction of GOPs to accept
+      int gop_skip_factor = (gop_accept_rate > 0) ? static_cast<int>(1.0 / gop_accept_rate + 0.5) : 1;
+      
+      RCLCPP_INFO(get_logger(),
+                  "📊 GOP-AWARE DROPPING MODE: %.1f GOPs/s, ~%.0f frames/GOP", 
+                  gops_per_sec, frames_per_gop);
+      RCLCPP_INFO(get_logger(),
+                  "   Target: %.1f fps → accepting every %dth GOP (%.1f GOPs/s × %.0f frames = %.1f fps)",
+                  direct_rtp_fps_, gop_skip_factor, 
+                  gops_per_sec / gop_skip_factor, frames_per_gop, 
+                  (gops_per_sec / gop_skip_factor) * frames_per_gop);
+      RCLCPP_INFO(get_logger(),
+                  "   ✅ No artifacts: entire GOPs kept intact (all P-frames preserved)");
+    }
     // Initialize GStreamer once (safe to call multiple times)
     static bool gst_inited = false;
     if (!gst_inited)
@@ -594,23 +627,26 @@ bool LiveviewModule::start_rtp_pipeline()
     return false;
   }
   
-  // Configure queue: small buffer, leaky=downstream (drop old frames), no blocking
+  // Configure queue: VERY small buffer for lowest latency
   g_object_set(G_OBJECT(queue),
-               "max-size-buffers", 5,  // Only keep 5 frames
+               "max-size-buffers", 2,  // Only 2 frames buffer (minimal latency)
                "max-size-bytes", 0,
                "max-size-time", 0,
                "leaky", 2,  // GST_QUEUE_LEAK_DOWNSTREAM (drop oldest)
                "flush-on-eos", TRUE,
+               "silent", FALSE,  // Log warnings about dropped frames
                nullptr);
 
   // Configure elements
-  // appsrc: live, time, block=false, emit-signals=false, max-bytes=0 (unlimited but fast drops)
+  // appsrc: live, time, min-latency mode, drop mode for backpressure
   g_object_set(G_OBJECT(appsrc),
                "is-live", TRUE,
                "format", GST_FORMAT_TIME,
                "block", FALSE,
                "emit-signals", FALSE,
                "max-bytes", 0,
+               "do-timestamp", TRUE,  // Let appsrc timestamp for us
+               "min-latency", 0,       // Minimize latency
                nullptr);
   // h264parse: prefer AU alignment and allow passthrough
   g_object_set(G_OBJECT(parse),
@@ -733,6 +769,8 @@ bool LiveviewModule::push_h264_to_pipeline(const uint8_t* buffer, uint32_t buffe
 {
   if (!gst_pipeline_ || !appsrc_) return false;
 
+  frames_received_++;  // Count every frame received
+
   // Detect if this frame contains an I-frame (IDR NAL unit type 5)
   bool is_keyframe = false;
   for (size_t i = 0; i + 4 < buffer_length; ++i) {
@@ -741,35 +779,35 @@ bool LiveviewModule::push_h264_to_pipeline(const uint8_t* buffer, uint32_t buffe
       size_t nal_start = (buffer[i+2] == 1) ? i+3 : i+4;
       if (nal_start < buffer_length && (buffer[nal_start] & 0x1F) == 5) {
         is_keyframe = true;
+        gops_received_++;  // Count GOPs
         break;
       }
     }
   }
 
-  // GOP-aware FPS limiting: decide on keyframes, apply to entire GOP
-  if (direct_rtp_fps_ > 0.0)
+  // GOP-aware FPS limiting: accept/reject entire GOPs (no artifacts!)
+  if (direct_rtp_fps_ > 0.0 && !direct_iframes_only_)
   {
     if (is_keyframe)
     {
-      // New GOP starts - decide whether to keep or skip
-      double min_interval = 1.0 / direct_rtp_fps_;
-      auto now = std::chrono::steady_clock::now();
-      std::chrono::duration<double> elapsed = now - last_frame_push_time_;
+      // New GOP starts - decide whether to keep or skip based on GOP counter
+      // Accept every Nth GOP where N = 30fps / target_fps
+      int gop_skip_factor = static_cast<int>(30.0 / direct_rtp_fps_ + 0.5);
+      if (gop_skip_factor < 1) gop_skip_factor = 1;
       
-      if (elapsed.count() < min_interval)
+      if (gops_received_ % gop_skip_factor == 0)
       {
-        // Skip this entire GOP
-        skip_current_gop_ = true;
-        RCLCPP_DEBUG(get_logger(), "⏭️  Skipping GOP: elapsed=%.3fs < %.3fs",
-                     elapsed.count(), min_interval);
-        return true;
+        // Accept this GOP
+        skip_current_gop_ = false;
+        gops_pushed_++;
+        RCLCPP_DEBUG(get_logger(), "✅ Accepting GOP #%lu (every %dth)", gops_received_, gop_skip_factor);
       }
       else
       {
-        // Keep this GOP
-        skip_current_gop_ = false;
-        last_frame_push_time_ = now;
-        RCLCPP_DEBUG(get_logger(), "✅ Accepting GOP (keyframe after %.3fs)", elapsed.count());
+        // Skip this GOP
+        skip_current_gop_ = true;
+        RCLCPP_DEBUG(get_logger(), "⏭️  Skipping GOP #%lu", gops_received_);
+        return true;
       }
     }
     else if (skip_current_gop_)
@@ -780,7 +818,38 @@ bool LiveviewModule::push_h264_to_pipeline(const uint8_t* buffer, uint32_t buffe
     }
     // else: P-frame from accepted GOP - pass through
   }
+  else if (direct_iframes_only_)
+  {
+    // I-frames-only mode: only accept keyframes
+    if (!is_keyframe)
+    {
+      RCLCPP_DEBUG(get_logger(), "⏭️  Dropping P-frame (I-frames-only mode)");
+      return true;
+    }
+    gops_pushed_++;
+  }
 
+  // Print stats every 5 seconds
+  auto now = std::chrono::steady_clock::now();
+  std::chrono::duration<double> stats_elapsed = now - last_stats_print_;
+  if (stats_elapsed.count() >= 5.0)
+  {
+    double pushed_fps = frames_pushed_ / stats_elapsed.count();
+    double received_fps = frames_received_ / stats_elapsed.count();
+    double drop_rate = (frames_received_ > 0) ? 
+                       100.0 * (1.0 - (double)frames_pushed_ / (double)frames_received_) : 0.0;
+    RCLCPP_INFO(get_logger(), 
+                "📊 RTP Stats [5s]: Received=%.1f fps (%lu GOPs), Pushed=%.1f fps (%lu GOPs), Drop=%.1f%%",
+                received_fps, gops_received_, pushed_fps, gops_pushed_, drop_rate);
+    // Reset counters
+    frames_received_ = 0;
+    frames_pushed_ = 0;
+    gops_received_ = 0;
+    gops_pushed_ = 0;
+    last_stats_print_ = now;
+  }
+
+  // Apply I-frames-only filter if enabled (NAL-level filtering)
   std::vector<uint8_t> bytes;
   const uint8_t* data = buffer;
   uint32_t len = buffer_length;
@@ -793,6 +862,7 @@ bool LiveviewModule::push_h264_to_pipeline(const uint8_t* buffer, uint32_t buffe
     len = static_cast<uint32_t>(bytes.size());
   }
 
+  // Create GStreamer buffer and push to pipeline
   GstBuffer* gstbuf = gst_buffer_new_allocate(nullptr, len, nullptr);
   if (!gstbuf) return false;
   GstMapInfo map;
@@ -804,18 +874,26 @@ bool LiveviewModule::push_h264_to_pipeline(const uint8_t* buffer, uint32_t buffe
   memcpy(map.data, data, len);
   gst_buffer_unmap(gstbuf, &map);
 
-  // Timestamp buffer with current clock; we don't have per-frame timestamps from DJI API here
-  GstClockTime now = gst_util_uint64_scale(this->get_clock()->now().nanoseconds(), 1, 1);
-  GST_BUFFER_PTS(gstbuf) = now;
+  // Let appsrc handle timestamping (do-timestamp=TRUE)
+  GST_BUFFER_PTS(gstbuf) = GST_CLOCK_TIME_NONE;
   GST_BUFFER_DTS(gstbuf) = GST_CLOCK_TIME_NONE;
   GST_BUFFER_DURATION(gstbuf) = GST_CLOCK_TIME_NONE;
 
   GstFlowReturn ret = gst_app_src_push_buffer(GST_APP_SRC(appsrc_), gstbuf);
   if (ret != GST_FLOW_OK)
   {
-    RCLCPP_DEBUG(get_logger(), "appsrc push returned %d", ret);
+    if (ret == GST_FLOW_FLUSHING)
+    {
+      RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 1000, 
+                           "⚠️  appsrc buffer FULL (flushing) - network too slow or decoder stalled!");
+    }
+    else
+    {
+      RCLCPP_DEBUG(get_logger(), "appsrc push returned %d", ret);
+    }
     return false;
   }
+  frames_pushed_++;  // Count successfully pushed frames
   return true;
 }
 void
