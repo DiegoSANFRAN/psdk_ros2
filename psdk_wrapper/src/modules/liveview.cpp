@@ -51,13 +51,13 @@ LiveviewModule::on_configure(const rclcpp_lifecycle::State &state)
   RCLCPP_INFO(get_logger(), "Configuring LiveviewModule");
   
   // Declare and get keyframe request interval parameter  
-  // For GOP-aware dropping at 10fps - SMOOTHER but higher bandwidth:
-  // - Keyframe every 0.2s = 5 GOPs/second (smaller GOPs = smoother playback)
-  // - Each GOP contains ~6 frames (30fps / 5 GOPs/s)
-  // - Accept EVERY 3rd GOP → 1.67 GOPs/s × 6 frames = 10fps
-  // - Bandwidth: ~2.0 Mbps (more I-frames but smoother)
-  // Trade-off: 54% more bandwidth vs 0.5s, but much smoother playback
-  this->declare_parameter("auto_keyframe_interval", 0.2);
+  // For GOP-aware dropping at 10fps - SMOOTHEST playback (highest bandwidth):
+  // - Keyframe every 0.1s = 10 GOPs/second (tiny GOPs = smoothest possible)
+  // - Each GOP contains ~3 frames (30fps / 10 GOPs/s)
+  // - Accept EVERY 3rd GOP → 3.33 GOPs/s × 3 frames = 10fps
+  // - Bandwidth: ~3.3 Mbps (most I-frames = highest BW but SMOOTHEST)
+  // - Gaps: Only 0.3s between accepted GOPs (very smooth!)
+  this->declare_parameter("auto_keyframe_interval", 0.1);
   keyframe_request_interval_ = this->get_parameter("auto_keyframe_interval").as_double();
   auto_keyframe_enabled_ = (keyframe_request_interval_ > 0.0);
 
