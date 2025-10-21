@@ -57,7 +57,7 @@ LiveviewModule::on_configure(const rclcpp_lifecycle::State &state)
   // - Accept EVERY 3rd GOP → 3.33 GOPs/s × 3 frames = 10fps
   // - Bandwidth: ~3.3 Mbps (most I-frames = highest BW but SMOOTHEST)
   // - Gaps: Only 0.3s between accepted GOPs (very smooth!)
-  this->declare_parameter("auto_keyframe_interval", 0.1);
+  this->declare_parameter("auto_keyframe_interval", 0.0);
   keyframe_request_interval_ = this->get_parameter("auto_keyframe_interval").as_double();
   auto_keyframe_enabled_ = (keyframe_request_interval_ > 0.0);
 
@@ -76,7 +76,7 @@ LiveviewModule::on_configure(const rclcpp_lifecycle::State &state)
   // - Smoothness: MAXIMUM (only 0.3s gaps between GOPs)
   // - Trade-off: Highest bandwidth but smoothest possible playback with GOP dropping
   this->declare_parameter("direct_rtp.iframes_only", false);
-  this->declare_parameter("direct_rtp.fps", 10.0);  // Target output FPS (GOP-aware dropping)
+  this->declare_parameter("direct_rtp.fps", 0.0);  // Target output FPS (GOP-aware dropping)
   direct_rtp_enabled_ = this->get_parameter("direct_rtp.enabled").as_bool();
   rtp_host_ = this->get_parameter("direct_rtp.host").as_string();
   rtp_port_ = this->get_parameter("direct_rtp.port").as_int();
@@ -110,16 +110,17 @@ LiveviewModule::on_configure(const rclcpp_lifecycle::State &state)
       RCLCPP_INFO(get_logger(),
                   "   All P-frames will be dropped, only I-frames sent at %.1f fps", direct_rtp_fps_);
     }
-    else
+    else if (auto_keyframe_enabled_)
     {
+      // Only calculate GOP stats if auto keyframe requests are enabled
       double gops_per_sec = 1.0 / keyframe_request_interval_;
       double frames_per_gop = 30.0 / gops_per_sec;
       double gop_accept_rate = direct_rtp_fps_ / 30.0;  // fraction of GOPs to accept
       int gop_skip_factor = (gop_accept_rate > 0) ? static_cast<int>(1.0 / gop_accept_rate + 0.5) : 1;
       
       RCLCPP_INFO(get_logger(),
-                  "📊 GOP-AWARE DROPPING MODE: %.1f GOPs/s, ~%.0f frames/GOP", 
-                  gops_per_sec, frames_per_gop);
+                  "📊 GOP-AWARE DROPPING MODE: %.1f GOPs/s, ~%.0f frames/GOP (keyframe interval=%.3fs)", 
+                  gops_per_sec, frames_per_gop, keyframe_request_interval_);
       RCLCPP_INFO(get_logger(),
                   "   Target: %.1f fps → accepting every %dth GOP (%.1f GOPs/s × %.0f frames = %.1f fps)",
                   direct_rtp_fps_, gop_skip_factor, 
@@ -127,6 +128,15 @@ LiveviewModule::on_configure(const rclcpp_lifecycle::State &state)
                   (gops_per_sec / gop_skip_factor) * frames_per_gop);
       RCLCPP_INFO(get_logger(),
                   "   ✅ No artifacts: entire GOPs kept intact (all P-frames preserved)");
+    }
+    else
+    {
+      RCLCPP_INFO(get_logger(),
+                  "📊 GOP-AWARE DROPPING MODE (no keyframe control): Using natural GOPs from camera");
+      RCLCPP_INFO(get_logger(),
+                  "   Target: %.1f fps → will accept GOPs as they arrive", direct_rtp_fps_);
+      RCLCPP_INFO(get_logger(),
+                  "   ⚠️  GOP structure depends on camera - may be irregular!");
     }
     // Initialize GStreamer once (safe to call multiple times)
     static bool gst_inited = false;
@@ -790,7 +800,11 @@ bool LiveviewModule::push_h264_to_pipeline(const uint8_t* buffer, uint32_t buffe
   }
 
   // GOP-aware FPS limiting: accept/reject entire GOPs (no artifacts!)
-  if (direct_rtp_fps_ > 0.0 && !direct_iframes_only_)
+  // Only apply filtering if:
+  // 1. We're controlling keyframes (auto_keyframe_enabled_), AND
+  // 2. FPS limiting is requested (direct_rtp_fps_ > 0), AND
+  // 3. Not in I-frames-only mode
+  if (auto_keyframe_enabled_ && direct_rtp_fps_ > 0.0 && !direct_iframes_only_)
   {
     if (is_keyframe)
     {
