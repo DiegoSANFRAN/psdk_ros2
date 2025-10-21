@@ -52,3 +52,15 @@
         battery_level: 1
         control_information: 1
         esc_data_frequency: 1
+
+      # Liveview module parameters
+      auto_keyframe_interval: 1.0  # 0.0 = disabled, >0.0 = request keyframes every N seconds
+      direct_rtp:
+        enabled: true
+        host: "127.0.0.1"
+        port: 5006
+        pt: 96
+        ssrc: 11111111
+        mtu: 1400
+        iframes_only: false  # false = GOP-aware dropping, true = I-frames only (high bandwidth)
+        fps: 0.0  # 0.0 = no FPS limiting (raw feed), >0.0 = target FPS with GOP dropping
