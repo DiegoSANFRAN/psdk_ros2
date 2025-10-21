@@ -64,7 +64,7 @@ LiveviewModule::on_configure(const rclcpp_lifecycle::State &state)
   this->declare_parameter("direct_rtp.ssrc", 11111111);
   this->declare_parameter("direct_rtp.mtu", 1400);  // Increased from 1000 for efficiency
   this->declare_parameter("direct_rtp.iframes_only", false);
-  this->declare_parameter("direct_rtp.fps", 10.0);
+  this->declare_parameter("direct_rtp.fps", 5.0);
   direct_rtp_enabled_ = this->get_parameter("direct_rtp.enabled").as_bool();
   rtp_host_ = this->get_parameter("direct_rtp.host").as_string();
   rtp_port_ = this->get_parameter("direct_rtp.port").as_int();
