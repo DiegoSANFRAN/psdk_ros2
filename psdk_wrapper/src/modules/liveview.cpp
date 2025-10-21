@@ -69,11 +69,12 @@ LiveviewModule::on_configure(const rclcpp_lifecycle::State &state)
   this->declare_parameter("direct_rtp.ssrc", 11111111);
   this->declare_parameter("direct_rtp.mtu", 1400);  // Increased from 1000 for efficiency
   // GOP-aware dropping: accept/reject entire GOPs (no artifacts, clean playback)
-  // With keyframe_interval=0.2s (5 GOPs/s) and fps=10.0:
-  // - Each GOP has ~6 frames (30fps / 5 GOPs/s)
-  // - Accept every 3rd GOP → 1.67 GOPs/s × 6 frames = ~10fps
-  // - Bandwidth: ~2.0 Mbps (more I-frames = higher BW but SMOOTHER playback)
-  // - Choppiness reduced: 0.2s gaps vs 0.5s gaps
+  // With keyframe_interval=0.1s (10 GOPs/s) and fps=10.0:
+  // - Each GOP has ~3 frames (30fps / 10 GOPs/s) - TINY GOPs!
+  // - Accept every 3rd GOP → 3.33 GOPs/s × 3 frames = ~10fps
+  // - Bandwidth: ~3.3 Mbps (highest due to many I-frames)
+  // - Smoothness: MAXIMUM (only 0.3s gaps between GOPs)
+  // - Trade-off: Highest bandwidth but smoothest possible playback with GOP dropping
   this->declare_parameter("direct_rtp.iframes_only", false);
   this->declare_parameter("direct_rtp.fps", 10.0);  // Target output FPS (GOP-aware dropping)
   direct_rtp_enabled_ = this->get_parameter("direct_rtp.enabled").as_bool();
