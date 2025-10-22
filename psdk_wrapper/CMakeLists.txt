@@ -35,6 +35,16 @@ find_package(nlohmann_json REQUIRED)
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(GSTREAMER REQUIRED gstreamer-1.0>=1.16 gstreamer-app-1.0>=1.16 gstreamer-pbutils-1.0>=1.16)
 
+# Optional: Check for ivaq_finder_search_msgs (webapp integration)
+find_package(ivaq_finder_search_msgs QUIET)
+if(ivaq_finder_search_msgs_FOUND)
+  message(STATUS "Found ivaq_finder_search_msgs - enabling webapp control")
+  add_definitions(-DHAS_IVAQ_FINDER_MSGS)
+  list(APPEND dependencies ivaq_finder_search_msgs)
+else()
+  message(STATUS "ivaq_finder_search_msgs not found - webapp control disabled")
+endif()
+
 # FetchContent module
 include(FetchContent)
 

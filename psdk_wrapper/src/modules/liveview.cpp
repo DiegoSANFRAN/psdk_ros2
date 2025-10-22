@@ -25,6 +25,12 @@ extern "C" {
 }
 #include <vector>
 #include <cstring>
+#include <fstream>
+#include <sstream>
+#include <sys/stat.h>
+
+// JSON status file writing (minimal, no external libs needed)
+#include <cstdlib>  // for getenv, system
 
 namespace psdk_ros2
 {
@@ -85,6 +91,23 @@ LiveviewModule::on_configure(const rclcpp_lifecycle::State &state)
   rtp_mtu_ = this->get_parameter("direct_rtp.mtu").as_int();
   direct_iframes_only_ = this->get_parameter("direct_rtp.iframes_only").as_bool();
   direct_rtp_fps_ = this->get_parameter("direct_rtp.fps").as_double();
+  
+  // Video streaming control (webapp integration)
+  this->declare_parameter("json_status_file_path", 
+                          std::string("~/Development/ivaq_webapp/production/dist/assets/data/finder_video_streaming_ready.json"));
+  json_status_file_path_ = this->get_parameter("json_status_file_path").as_string();
+  
+  // Expand ~ to home directory
+  if (json_status_file_path_[0] == '~') {
+    const char* home = std::getenv("HOME");
+    if (home) {
+      json_status_file_path_ = std::string(home) + json_status_file_path_.substr(1);
+    }
+  }
+  
+  // Initialize JSON status file (streaming not ready yet)
+  write_video_streaming_status(false, false);
+  RCLCPP_INFO(get_logger(), "JSON status file path: %s", json_status_file_path_.c_str());
   
   if (auto_keyframe_enabled_)
   {
@@ -162,6 +185,18 @@ LiveviewModule::on_configure(const rclcpp_lifecycle::State &state)
       std::bind(&LiveviewModule::camera_request_intraframe_cb, this,
                 std::placeholders::_1, std::placeholders::_2),
       qos_profile_);
+  
+  // Subscribe to video streaming control topic (webapp integration)
+#ifdef HAS_IVAQ_FINDER_MSGS
+  video_streaming_control_sub_ = create_subscription<ivaq_finder_search_msgs::msg::IvaqFinderVideoStreaming>(
+      "ivaq_finder_video_streaming",
+      10,
+      std::bind(&LiveviewModule::on_video_streaming_control, this, std::placeholders::_1));
+  RCLCPP_INFO(get_logger(), "Subscribed to ivaq_finder_video_streaming topic for webapp control");
+#else
+  RCLCPP_WARN(get_logger(), "ivaq_finder_search_msgs not available - webapp control disabled");
+#endif
+  
   return CallbackReturn::SUCCESS;
 }
 
@@ -708,12 +743,22 @@ bool LiveviewModule::start_rtp_pipeline()
   udpsink_ = sink;
   RCLCPP_INFO(get_logger(), "Direct RTP pipeline started: %s:%d (PT=%u, SSRC=%u, MTU=%d)",
               rtp_host_.c_str(), rtp_port_, rtp_pt_, rtp_ssrc_, rtp_mtu_);
+  
+  // Update webapp status: streaming is now initialized
+  if (video_streaming_requested_)
+  {
+    write_video_streaming_status(true, true);
+    RCLCPP_INFO(get_logger(), "📺 Video streaming initialized - webapp notified");
+  }
+  
   return true;
 }
 
 void LiveviewModule::stop_rtp_pipeline()
 {
   if (!gst_pipeline_) return;
+  
+  RCLCPP_INFO(get_logger(), "Stopping RTP pipeline");
   gst_element_set_state(GST_ELEMENT(gst_pipeline_), GST_STATE_NULL);
   gst_object_unref(gst_pipeline_);
   gst_pipeline_ = nullptr;
@@ -721,6 +766,10 @@ void LiveviewModule::stop_rtp_pipeline()
   h264parse_ = nullptr;
   rtph264pay_ = nullptr;
   udpsink_ = nullptr;
+  
+  // Update webapp status: streaming stopped
+  write_video_streaming_status(false, false);
+  RCLCPP_INFO(get_logger(), "📺 Video streaming stopped - webapp notified");
 }
 
 // Very small NAL scan to detect IDR/SPS/PPS and optionally rebuild Annex-B with only allowed types
@@ -953,5 +1002,83 @@ LiveviewModule::auto_request_keyframe_callback()
                  payload_index_, selected_camera_source_);
   }
 }
+
+// ===== Video Streaming Control (Webapp Integration) =====
+
+void
+LiveviewModule::write_video_streaming_status(bool start_stop_flag, bool initialized_flag)
+{
+  try
+  {
+    // Create directory if it doesn't exist
+    std::string dir_path = json_status_file_path_.substr(0, json_status_file_path_.find_last_of("/"));
+    std::string mkdir_cmd = "mkdir -p " + dir_path;
+    system(mkdir_cmd.c_str());
+    
+    // Write minimal JSON (no external library needed)
+    std::ofstream file(json_status_file_path_);
+    if (file.is_open())
+    {
+      file << "{\n";
+      file << "  \"video_streaming_start_stop_flag\": " << (start_stop_flag ? "true" : "false") << ",\n";
+      file << "  \"video_streaming_initialized_flag\": " << (initialized_flag ? "true" : "false") << "\n";
+      file << "}\n";
+      file.close();
+      RCLCPP_DEBUG(get_logger(), "Updated video streaming status: start_stop=%s, initialized=%s",
+                   start_stop_flag ? "true" : "false", initialized_flag ? "true" : "false");
+    }
+    else
+    {
+      RCLCPP_WARN(get_logger(), "Failed to open JSON status file: %s", json_status_file_path_.c_str());
+    }
+  }
+  catch (const std::exception& e)
+  {
+    RCLCPP_ERROR(get_logger(), "Error writing JSON status file: %s", e.what());
+  }
+}
+
+#ifdef HAS_IVAQ_FINDER_MSGS
+void
+LiveviewModule::on_video_streaming_control(
+    const ivaq_finder_search_msgs::msg::IvaqFinderVideoStreaming::SharedPtr msg)
+{
+  video_streaming_requested_ = msg->video_streaming_start_stop_flag;
+  
+  if (msg->video_streaming_start_stop_flag)
+  {
+    RCLCPP_INFO(get_logger(), "📺 Webapp requested video streaming START");
+    
+    // If RTP is already running, just update status
+    if (gst_pipeline_)
+    {
+      RCLCPP_INFO(get_logger(), "RTP pipeline already running - updating status to initialized");
+      write_video_streaming_status(true, true);
+    }
+    else
+    {
+      RCLCPP_INFO(get_logger(), "RTP pipeline not running - will start when camera streaming begins");
+      write_video_streaming_status(true, false);
+    }
+  }
+  else
+  {
+    RCLCPP_INFO(get_logger(), "📺 Webapp requested video streaming STOP");
+    
+    // Stop RTP pipeline
+    stop_rtp_pipeline();
+    
+    // Stop camera streaming
+    if (is_streaming_active_)
+    {
+      stop_main_camera_stream(payload_index_, selected_camera_source_);
+      is_streaming_active_ = false;
+    }
+    
+    // Update status
+    write_video_streaming_status(false, false);
+  }
+}
+#endif
 
 }  // namespace psdk_ros2
