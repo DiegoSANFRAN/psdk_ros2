@@ -809,8 +809,21 @@ bool LiveviewModule::push_h264_to_pipeline(const uint8_t* buffer, uint32_t buffe
     if (is_keyframe)
     {
       // New GOP starts - decide whether to keep or skip based on GOP counter
-      // Accept every Nth GOP where N = 30fps / target_fps
-      int gop_skip_factor = static_cast<int>(30.0 / direct_rtp_fps_ + 0.5);
+      // The drone adds I-frames ON TOP of base P-frames, so:
+      // - Base camera FPS (P-frames): ~30 fps
+      // - Keyframe requests: 1/keyframe_request_interval_ GOPs/s (each adds 1 I-frame)
+      // - Total FPS = base_fps + GOP_rate = 30 + (1/keyframe_interval)
+      // - Frames per GOP = (base_fps + GOP_rate) / GOP_rate
+      //
+      // Example with 0.05s interval (20 Hz keyframes):
+      //   Total FPS = 30 + 20 = 50 fps
+      //   Frames/GOP = 50/20 = 2.5 (1 I-frame + 1.5 P-frames avg)
+      //   For target 15fps: need 15/2.5 = 6 GOPs/s → skip every 20/6 ≈ 3rd GOP
+      double gops_per_second = 1.0 / keyframe_request_interval_;
+      double estimated_total_fps = 30.0 + gops_per_second;  // P-frames + I-frames
+      double frames_per_gop = estimated_total_fps / gops_per_second;
+      double desired_gops_per_second = direct_rtp_fps_ / frames_per_gop;
+      int gop_skip_factor = static_cast<int>(gops_per_second / desired_gops_per_second + 0.5);
       if (gop_skip_factor < 1) gop_skip_factor = 1;
       
       if (gops_received_ % gop_skip_factor == 0)
