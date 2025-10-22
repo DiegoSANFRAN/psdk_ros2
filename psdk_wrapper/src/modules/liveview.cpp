@@ -18,6 +18,11 @@
 
 #include "psdk_wrapper/modules/liveview.hpp"
 
+// Include ivaq_finder_search_msgs if available (optional dependency)
+#ifdef HAS_IVAQ_FINDER_MSGS
+#include "ivaq_finder_search_msgs/msg/ivaq_finder_video_streaming.hpp"
+#endif
+
 // GStreamer headers (C linkage)
 extern "C" {
 #include <gst/gst.h>

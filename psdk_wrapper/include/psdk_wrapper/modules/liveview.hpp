@@ -38,11 +38,6 @@ typedef struct _GstPipeline GstPipeline;
 #include "psdk_interfaces/srv/camera_request_intraframe.hpp"
 #include "psdk_wrapper/utils/psdk_wrapper_utils.hpp"
 
-// Include ivaq_finder_search_msgs if available (optional dependency)
-#ifdef HAS_IVAQ_FINDER_MSGS
-#include "ivaq_finder_search_msgs/msg/ivaq_finder_video_streaming.hpp"
-#endif
-
 namespace psdk_ros2
 {
 
@@ -272,12 +267,8 @@ class LiveviewModule : public rclcpp_lifecycle::LifecycleNode
   void auto_request_keyframe_callback();
 
   // ===== Video streaming control (webapp integration) =====
-#ifdef HAS_IVAQ_FINDER_MSGS
-  rclcpp::Subscription<ivaq_finder_search_msgs::msg::IvaqFinderVideoStreaming>::SharedPtr
-      video_streaming_control_sub_;
-  void on_video_streaming_control(
-      const ivaq_finder_search_msgs::msg::IvaqFinderVideoStreaming::SharedPtr msg);
-#endif
+  // Use base class pointer to avoid including ivaq_finder_search_msgs in header
+  rclcpp::SubscriptionBase::SharedPtr video_streaming_control_sub_;
   
   bool video_streaming_requested_{false};  // Track if webapp wants streaming
   std::string json_status_file_path_;      // Path to JSON status file
