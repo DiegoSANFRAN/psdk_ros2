@@ -27,6 +27,9 @@
   <depend>psdk_interfaces</depend>
   <depend>std_srvs</depend>
   <depend>nlohmann-json-dev</depend>
+  <build_depend>ivaq_finder_search_msgs</build_depend>
+  <build_export_depend>ivaq_finder_search_msgs</build_export_depend>
+  <exec_depend>ivaq_finder_search_msgs</exec_depend>
 
   <export>
     <build_type>ament_cmake</build_type>
