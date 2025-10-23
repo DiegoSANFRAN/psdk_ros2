@@ -294,7 +294,7 @@ LiveviewModule::init()
       {DJI_LIVEVIEW_CAMERA_POSITION_NO_3, (new DJICameraStreamDecoder())},
   };
   decode_stream_ = true;
-  payload_index_ = DJI_LIVEVIEW_CAMERA_POSITION_NO_1;
+  payload_index_ = DJI_LIVEVIEW_CAMERA_POSITION_FPV;
   is_module_initialized_ = true;
   return true;
 }
