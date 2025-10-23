@@ -20,14 +20,7 @@
 
 // Include ivaq_finder_search_msgs if available (optional dependency)
 #ifdef HAS_IVAQ_FINDER_MSGS
-#if __has_include("ivaq_finder_search_msgs/msg/ivaq_finder_video_streaming.hpp")
 #include "ivaq_finder_search_msgs/msg/ivaq_finder_video_streaming.hpp"
-#elif __has_include("ivaq_finder_search_msgs/ivaq_finder_search_msgs/msg/ivaq_finder_video_streaming.hpp")
-// Some installations nest the package name twice under include/
-#include "ivaq_finder_search_msgs/ivaq_finder_search_msgs/msg/ivaq_finder_video_streaming.hpp"
-#else
-#warning "ivaq_finder_video_streaming.hpp not found in expected include paths"
-#endif
 #endif
 
 // GStreamer headers (C linkage)

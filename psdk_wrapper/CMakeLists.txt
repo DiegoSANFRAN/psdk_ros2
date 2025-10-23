@@ -155,6 +155,7 @@ set(dependencies
   nav_msgs
   psdk_interfaces
   std_srvs
+  ivaq_finder_search_msgs
 )
 
 add_executable(psdk_wrapper_node
