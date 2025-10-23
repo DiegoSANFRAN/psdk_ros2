@@ -307,8 +307,8 @@ LiveviewModule::init()
       {DJI_LIVEVIEW_CAMERA_POSITION_NO_2, (new DJICameraStreamDecoder())},
       {DJI_LIVEVIEW_CAMERA_POSITION_NO_3, (new DJICameraStreamDecoder())},
   };
-  decode_stream_ = true;
-  payload_index_ = DJI_LIVEVIEW_CAMERA_POSITION_FPV;
+  decode_stream_ = false;
+  payload_index_ = DJI_LIVEVIEW_CAMERA_POSITION_NO_1;
   selected_camera_source_ = static_cast<E_DjiLiveViewCameraSource>(0);  // Default to camera source 0 (primary/wide)
   is_module_initialized_ = true;
   RCLCPP_INFO(get_logger(), "Liveview module initialized with defaults: payload_index=%d, camera_source=0", payload_index_);
