@@ -111,7 +111,7 @@ LiveviewModule::on_configure(const rclcpp_lifecycle::State &state)
   }
   
   // Initialize JSON status file (streaming not ready yet)
-  write_video_streaming_status(false, false);
+  write_video_streaming_status(false, false, video_streaming_camera_type_);
   RCLCPP_INFO(get_logger(), "JSON status file path: %s", json_status_file_path_.c_str());
   
   if (auto_keyframe_enabled_)
@@ -796,7 +796,7 @@ bool LiveviewModule::start_rtp_pipeline()
   // Update webapp status: streaming is now initialized
   if (video_streaming_requested_)
   {
-    write_video_streaming_status(true, true);
+    write_video_streaming_status(true, true, video_streaming_camera_type_);
     RCLCPP_INFO(get_logger(), "📺 Video streaming initialized - webapp notified");
   }
   
@@ -817,7 +817,7 @@ void LiveviewModule::stop_rtp_pipeline()
   udpsink_ = nullptr;
   
   // Update webapp status: streaming stopped
-  write_video_streaming_status(false, false);
+  write_video_streaming_status(false, false, video_streaming_camera_type_);
   RCLCPP_INFO(get_logger(), "📺 Video streaming stopped - webapp notified");
 }
 
@@ -1070,7 +1070,7 @@ LiveviewModule::auto_request_keyframe_callback()
 // ===== Video Streaming Control (Webapp Integration) =====
 
 void
-LiveviewModule::write_video_streaming_status(bool start_stop_flag, bool initialized_flag)
+LiveviewModule::write_video_streaming_status(bool start_stop_flag, bool initialized_flag, uint8_t camera_type)
 {
   try
   {
@@ -1085,11 +1085,12 @@ LiveviewModule::write_video_streaming_status(bool start_stop_flag, bool initiali
     {
       file << "{\n";
       file << "  \"video_streaming_start_stop_flag\": " << (start_stop_flag ? "true" : "false") << ",\n";
-      file << "  \"video_streaming_initialized_flag\": " << (initialized_flag ? "true" : "false") << "\n";
+      file << "  \"video_streaming_initialized_flag\": " << (initialized_flag ? "true" : "false") << ",\n";
+      file << "  \"video_streaming_camera_type\": " << static_cast<int>(camera_type) << "\n";
       file << "}\n";
       file.close();
-      RCLCPP_DEBUG(get_logger(), "Updated video streaming status: start_stop=%s, initialized=%s",
-                   start_stop_flag ? "true" : "false", initialized_flag ? "true" : "false");
+      RCLCPP_DEBUG(get_logger(), "Updated video streaming status: start_stop=%s, initialized=%s, camera_type=%d",
+                   start_stop_flag ? "true" : "false", initialized_flag ? "true" : "false", camera_type);
     }
     else
     {
@@ -1108,16 +1109,18 @@ LiveviewModule::on_video_streaming_control(
     const ivaq_finder_search_msgs::msg::IvaqFinderVideoStreaming::SharedPtr msg)
 {
   video_streaming_requested_ = msg->video_streaming_start_stop_flag;
+  video_streaming_camera_type_ = msg->video_streaming_camera_type;
   
   if (msg->video_streaming_start_stop_flag)
   {
-    RCLCPP_INFO(get_logger(), "📺 Webapp requested video streaming START");
+    RCLCPP_INFO(get_logger(), "📺 Webapp requested video streaming START (camera_type=%d)", 
+                msg->video_streaming_camera_type);
     
     // If RTP is already running, just update status
     if (gst_pipeline_)
     {
       RCLCPP_INFO(get_logger(), "RTP pipeline already running - updating status to initialized");
-      write_video_streaming_status(true, true);
+      write_video_streaming_status(true, true, video_streaming_camera_type_);
     }
     else if (!is_streaming_active_)
     {
@@ -1127,7 +1130,8 @@ LiveviewModule::on_video_streaming_control(
       auto request = std::make_shared<CameraSetupStreaming::Request>();
       auto response = std::make_shared<CameraSetupStreaming::Response>();
       
-      request->payload_index = payload_index_;
+      // Use the camera type from the message instead of payload_index_
+      request->payload_index = static_cast<E_DjiLiveViewCameraPosition>(msg->video_streaming_camera_type);
       request->camera_source = selected_camera_source_;
       // CRITICAL: Always request encoded H264 for direct RTP streaming (no decoding)
       // When direct_rtp_enabled_ is true, we need raw H264 to feed GStreamer
@@ -1144,7 +1148,7 @@ LiveviewModule::on_video_streaming_control(
       }
       else
       {
-        write_video_streaming_status(false, false);
+        write_video_streaming_status(false, false, video_streaming_camera_type_);
         RCLCPP_ERROR(get_logger(), "❌ Failed to start camera streaming via webapp");
       }
     }
@@ -1157,7 +1161,7 @@ LiveviewModule::on_video_streaming_control(
     auto request = std::make_shared<CameraSetupStreaming::Request>();
     auto response = std::make_shared<CameraSetupStreaming::Response>();
     
-    request->payload_index = payload_index_;
+    request->payload_index = static_cast<E_DjiLiveViewCameraPosition>(video_streaming_camera_type_);
     request->camera_source = selected_camera_source_;
     request->decoded_output = false;  // Match the start request
     request->start_stop = false;
