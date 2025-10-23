@@ -794,10 +794,11 @@ bool LiveviewModule::start_rtp_pipeline()
               rtp_host_.c_str(), rtp_port_, rtp_pt_, rtp_ssrc_, rtp_mtu_);
   
   // Update webapp status: streaming is now initialized
+  // Use payload_index_ (just updated from request) instead of video_streaming_camera_type_ (may be stale)
   if (video_streaming_requested_)
   {
-    write_video_streaming_status(true, true, video_streaming_camera_type_);
-    RCLCPP_INFO(get_logger(), "📺 Video streaming initialized - webapp notified");
+    write_video_streaming_status(true, true, static_cast<uint8_t>(payload_index_));
+    RCLCPP_INFO(get_logger(), "📺 Video streaming initialized - webapp notified with camera_type=%d", payload_index_);
   }
   
   return true;
