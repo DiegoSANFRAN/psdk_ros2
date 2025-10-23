@@ -1090,7 +1090,7 @@ LiveviewModule::write_video_streaming_status(bool start_stop_flag, bool initiali
       file << "  \"video_streaming_camera_type\": " << static_cast<int>(camera_type) << "\n";
       file << "}\n";
       file.close();
-      RCLCPP_DEBUG(get_logger(), "Updated video streaming status: start_stop=%s, initialized=%s, camera_type=%d",
+      RCLCPP_INFO(get_logger(), "Updated video streaming status: start_stop=%s, initialized=%s, camera_type=%d",
                    start_stop_flag ? "true" : "false", initialized_flag ? "true" : "false", camera_type);
     }
     else
