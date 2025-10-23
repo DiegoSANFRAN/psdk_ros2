@@ -194,7 +194,7 @@ LiveviewModule::on_configure(const rclcpp_lifecycle::State &state)
   // Subscribe to video streaming control topic (webapp integration)
 #ifdef HAS_IVAQ_FINDER_MSGS
   video_streaming_control_sub_ = create_subscription<ivaq_finder_search_msgs::msg::IvaqFinderVideoStreaming>(
-      "ivaq_finder_video_streaming",
+      "/ivaq_finder_video_streaming",
       10,
       std::bind(&LiveviewModule::on_video_streaming_control, this, std::placeholders::_1));
   RCLCPP_INFO(get_logger(), "Subscribed to ivaq_finder_video_streaming topic for webapp control");
