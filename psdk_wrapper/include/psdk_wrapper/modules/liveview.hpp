@@ -23,6 +23,11 @@
 typedef struct _GstElement GstElement;
 typedef struct _GstPipeline GstPipeline;
 
+// Include ivaq_finder_search_msgs if available (optional dependency)
+#ifdef HAS_IVAQ_FINDER_MSGS
+#include "ivaq_finder_search_msgs/msg/ivaq_finder_video_streaming.hpp"
+#endif
+
 #include <dji_camera_stream_decoder.hpp>  //NOLINT
 #include <map>
 #include <memory>
@@ -279,6 +284,15 @@ class LiveviewModule : public rclcpp_lifecycle::LifecycleNode
    * @param initialized_flag Whether streaming is ready
    */
   void write_video_streaming_status(bool start_stop_flag, bool initialized_flag);
+
+#ifdef HAS_IVAQ_FINDER_MSGS
+  /**
+   * @brief Callback for video streaming control messages from webapp
+   * @param msg Video streaming control message
+   */
+  void on_video_streaming_control(
+      const ivaq_finder_search_msgs::msg::IvaqFinderVideoStreaming::SharedPtr msg);
+#endif
 
   mutable std::shared_mutex global_ptr_mutex_;
 };
