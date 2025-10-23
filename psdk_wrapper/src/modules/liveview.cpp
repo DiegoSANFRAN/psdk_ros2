@@ -1060,56 +1060,29 @@ LiveviewModule::on_video_streaming_control(
       RCLCPP_INFO(get_logger(), "RTP pipeline already running - updating status to initialized");
       write_video_streaming_status(true, true);
     }
-    else
+    else if (!is_streaming_active_)
     {
-      RCLCPP_INFO(get_logger(), "RTP pipeline not running - starting camera streaming and RTP pipeline");
+      RCLCPP_INFO(get_logger(), "Starting camera streaming via webapp control");
       
-      // Start camera streaming (which will trigger RTP pipeline start)
-      bool streaming_started = false;
-      if (payload_index_ == DJI_LIVEVIEW_CAMERA_POSITION_NO_1)
-      {
-        char main_camera_name[] = "MAIN_CAMERA";
-        streaming_started = start_camera_stream(&c_publish_main_streaming_callback,
-                                                &main_camera_name, payload_index_,
-                                                selected_camera_source_);
-      }
-      else if (payload_index_ == DJI_LIVEVIEW_CAMERA_POSITION_FPV)
-      {
-        char fpv_camera_name[] = "FPV_CAMERA";
-        streaming_started = start_camera_stream(&c_publish_fpv_streaming_callback,
-                                                &fpv_camera_name, payload_index_,
-                                                selected_camera_source_);
-      }
+      // Create request/response and call the existing service callback
+      auto request = std::make_shared<CameraSetupStreaming::Request>();
+      auto response = std::make_shared<CameraSetupStreaming::Response>();
       
-      if (streaming_started)
+      request->payload_index = payload_index_;
+      request->camera_source = selected_camera_source_;
+      request->decoded_output = decode_stream_;
+      request->start_stop = true;
+      
+      camera_setup_streaming_cb(request, response);
+      
+      if (response->success)
       {
-        is_streaming_active_ = true;
-        
-        // Start RTP pipeline
-        if (start_rtp_pipeline())
-        {
-          write_video_streaming_status(true, true);
-          RCLCPP_INFO(get_logger(), "✅ Camera streaming and RTP pipeline started successfully");
-        }
-        else
-        {
-          write_video_streaming_status(true, false);
-          RCLCPP_ERROR(get_logger(), "❌ Failed to start RTP pipeline");
-        }
-        
-        // Start automatic keyframe timer if configured
-        if (auto_keyframe_enabled_ && !keyframe_request_timer_)
-        {
-          keyframe_request_timer_ = this->create_wall_timer(
-              std::chrono::duration<double>(keyframe_request_interval_),
-              std::bind(&LiveviewModule::auto_request_keyframe_callback, this));
-          RCLCPP_INFO(get_logger(), "🎯 Started automatic keyframe request timer");
-        }
+        RCLCPP_INFO(get_logger(), "✅ Camera streaming started successfully via webapp");
       }
       else
       {
         write_video_streaming_status(false, false);
-        RCLCPP_ERROR(get_logger(), "❌ Failed to start camera streaming");
+        RCLCPP_ERROR(get_logger(), "❌ Failed to start camera streaming via webapp");
       }
     }
   }
@@ -1117,18 +1090,25 @@ LiveviewModule::on_video_streaming_control(
   {
     RCLCPP_INFO(get_logger(), "📺 Webapp requested video streaming STOP");
     
-    // Stop RTP pipeline
-    stop_rtp_pipeline();
+    // Create request/response and call the existing service callback
+    auto request = std::make_shared<CameraSetupStreaming::Request>();
+    auto response = std::make_shared<CameraSetupStreaming::Response>();
     
-    // Stop camera streaming
-    if (is_streaming_active_)
+    request->payload_index = payload_index_;
+    request->camera_source = selected_camera_source_;
+    request->decoded_output = decode_stream_;
+    request->start_stop = false;
+    
+    camera_setup_streaming_cb(request, response);
+    
+    if (response->success)
     {
-      stop_main_camera_stream(payload_index_, selected_camera_source_);
-      is_streaming_active_ = false;
+      RCLCPP_INFO(get_logger(), "✅ Camera streaming stopped successfully via webapp");
     }
-    
-    // Update status
-    write_video_streaming_status(false, false);
+    else
+    {
+      RCLCPP_ERROR(get_logger(), "❌ Failed to stop camera streaming via webapp");
+    }
   }
 }
 #endif
