@@ -339,14 +339,31 @@ c_LiveviewConvertH264ToRgbCallback(E_DjiLiveViewCameraPosition position,
   std::unique_lock<std::shared_mutex> lock(
       global_liveview_ptr_->global_ptr_mutex_);
 
+  static int frame_count = 0;
+  frame_count++;
+  
   if (global_liveview_ptr_->decode_stream_)
   {
+    // Log first frame to show we're taking decode path
+    if (frame_count <= 2)
+    {
+      RCLCPP_WARN(global_liveview_ptr_->get_logger(),
+                  "📹 Frame #%d: Taking DECODE path (decode_stream_=true) - H264 will NOT reach GStreamer!",
+                  frame_count);
+    }
     return global_liveview_ptr_->LiveviewConvertH264ToRgbCallback(
         position, buffer, buffer_length);
   }
   // Direct RTP pipeline: push H264 frames directly to appsrc
   if (global_liveview_ptr_->direct_rtp_enabled_ && global_liveview_ptr_->gst_pipeline_)
   {
+    // Log first frame to show we're taking RTP path
+    if (frame_count <= 2)
+    {
+      RCLCPP_INFO(global_liveview_ptr_->get_logger(),
+                  "📹 Frame #%d: Taking RTP path (decode_stream_=false) - pushing to GStreamer, size=%u bytes",
+                  frame_count, buffer_length);
+    }
     global_liveview_ptr_->push_h264_to_pipeline(buffer, buffer_length);
     return;
   }
@@ -401,6 +418,17 @@ LiveviewModule::camera_setup_streaming_cb(
               "Setting up camera streaming for payload index %d and camera "
               "source %d. Output decoded: %d",
               payload_index_, selected_camera_source_, decode_stream_);
+  
+  if (direct_rtp_enabled_ && decode_stream_)
+  {
+    RCLCPP_ERROR(get_logger(),
+                 "❌ CRITICAL: decode_stream_=TRUE but direct RTP is enabled! H264 will be decoded, not sent to GStreamer!");
+  }
+  else if (direct_rtp_enabled_ && !decode_stream_)
+  {
+    RCLCPP_INFO(get_logger(),
+                "✅ CORRECT: decode_stream_=FALSE with direct RTP - H264 will flow to GStreamer");
+  }
 
   if (request->start_stop)
   {
@@ -980,6 +1008,14 @@ bool LiveviewModule::push_h264_to_pipeline(const uint8_t* buffer, uint32_t buffe
   GST_BUFFER_DTS(gstbuf) = GST_CLOCK_TIME_NONE;
   GST_BUFFER_DURATION(gstbuf) = GST_CLOCK_TIME_NONE;
 
+  // Log first few successful pushes
+  static int push_count = 0;
+  if (push_count < 5)
+  {
+    RCLCPP_INFO(get_logger(), "🚀 Push #%d: Pushing %u bytes to appsrc (keyframe=%d)", 
+                push_count + 1, len, is_keyframe);
+  }
+  
   GstFlowReturn ret = gst_app_src_push_buffer(GST_APP_SRC(appsrc_), gstbuf);
   if (ret != GST_FLOW_OK)
   {
@@ -990,10 +1026,17 @@ bool LiveviewModule::push_h264_to_pipeline(const uint8_t* buffer, uint32_t buffe
     }
     else
     {
-      RCLCPP_DEBUG(get_logger(), "appsrc push returned %d", ret);
+      RCLCPP_WARN(get_logger(), "appsrc push returned %d (frame #%d)", ret, push_count);
     }
     return false;
   }
+  
+  push_count++;
+  if (push_count == 5)
+  {
+    RCLCPP_INFO(get_logger(), "✅ Successfully pushed first 5 frames to GStreamer pipeline");
+  }
+  
   frames_pushed_++;  // Count successfully pushed frames
   return true;
 }
