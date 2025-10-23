@@ -131,6 +131,20 @@ LiveviewModule::on_configure(const rclcpp_lifecycle::State &state)
                 "✅ Direct RTP mode ENABLED → %s:%d, PT=%u, SSRC=%u, MTU=%d, I-frames only=%s, Target FPS=%.1f",
                 rtp_host_.c_str(), rtp_port_, rtp_pt_, rtp_ssrc_, rtp_mtu_,
                 direct_iframes_only_ ? "true" : "false", direct_rtp_fps_);
+    
+    // CRITICAL: Warn if decode_stream_ is true in direct RTP mode
+    if (decode_stream_)
+    {
+      RCLCPP_WARN(get_logger(), 
+                  "⚠️  WARNING: decode_stream_ is TRUE but direct RTP mode is enabled!");
+      RCLCPP_WARN(get_logger(),
+                  "   This will cause H264 frames to be decoded to RGB instead of being sent to GStreamer.");
+      RCLCPP_WARN(get_logger(),
+                  "   For direct RTP, decoded_output should be FALSE when calling camera_setup_streaming.");
+      RCLCPP_WARN(get_logger(),
+                  "   Webapp-initiated streaming will override this to FALSE automatically.");
+    }
+    
     if (direct_iframes_only_)
     {
       RCLCPP_WARN(get_logger(), 
@@ -192,15 +206,15 @@ LiveviewModule::on_configure(const rclcpp_lifecycle::State &state)
       qos_profile_);
   
   // Subscribe to video streaming control topic (webapp integration)
-#ifdef HAS_IVAQ_FINDER_MSGS
-  video_streaming_control_sub_ = create_subscription<ivaq_finder_search_msgs::msg::IvaqFinderVideoStreaming>(
-      "/ivaq_finder_video_streaming",
-      10,
-      std::bind(&LiveviewModule::on_video_streaming_control, this, std::placeholders::_1));
-  RCLCPP_INFO(get_logger(), "Subscribed to ivaq_finder_video_streaming topic for webapp control");
-#else
-  RCLCPP_WARN(get_logger(), "ivaq_finder_search_msgs not available - webapp control disabled");
-#endif
+  #ifdef HAS_IVAQ_FINDER_MSGS
+    video_streaming_control_sub_ = create_subscription<ivaq_finder_search_msgs::msg::IvaqFinderVideoStreaming>(
+        "/ivaq_finder_video_streaming",
+        10,
+        std::bind(&LiveviewModule::on_video_streaming_control, this, std::placeholders::_1));
+    RCLCPP_INFO(get_logger(), "Subscribed to ivaq_finder_video_streaming topic for webapp control");
+  #else
+    RCLCPP_WARN(get_logger(), "ivaq_finder_search_msgs not available - webapp control disabled");
+  #endif
   
   return CallbackReturn::SUCCESS;
 }
@@ -295,7 +309,9 @@ LiveviewModule::init()
   };
   decode_stream_ = true;
   payload_index_ = DJI_LIVEVIEW_CAMERA_POSITION_FPV;
+  selected_camera_source_ = static_cast<E_DjiLiveViewCameraSource>(0);  // Default to camera source 0 (primary/wide)
   is_module_initialized_ = true;
+  RCLCPP_INFO(get_logger(), "Liveview module initialized with defaults: payload_index=%d, camera_source=0", payload_index_);
   return true;
 }
 
@@ -1070,8 +1086,12 @@ LiveviewModule::on_video_streaming_control(
       
       request->payload_index = payload_index_;
       request->camera_source = selected_camera_source_;
-      request->decoded_output = decode_stream_;
+      // CRITICAL: Always request encoded H264 for direct RTP streaming (no decoding)
+      // When direct_rtp_enabled_ is true, we need raw H264 to feed GStreamer
+      request->decoded_output = false;  // Force encoded output for RTP pipeline
       request->start_stop = true;
+      
+      RCLCPP_INFO(get_logger(), "📹 Requesting encoded H264 stream (decoded_output=false) for RTP pipeline");
       
       camera_setup_streaming_cb(request, response);
       
@@ -1096,7 +1116,7 @@ LiveviewModule::on_video_streaming_control(
     
     request->payload_index = payload_index_;
     request->camera_source = selected_camera_source_;
-    request->decoded_output = decode_stream_;
+    request->decoded_output = false;  // Match the start request
     request->start_stop = false;
     
     camera_setup_streaming_cb(request, response);
