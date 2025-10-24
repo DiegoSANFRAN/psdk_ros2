@@ -277,6 +277,7 @@ class LiveviewModule : public rclcpp_lifecycle::LifecycleNode
   
   bool video_streaming_requested_{false};  // Track if webapp wants streaming
   uint8_t video_streaming_camera_type_{7};  // Default to FPV (7)
+  uint8_t video_streaming_bandwidth_{1};   // Default to MEDIUM (2)
   std::string json_status_file_path_;      // Path to JSON status file
   
   /**
@@ -284,8 +285,9 @@ class LiveviewModule : public rclcpp_lifecycle::LifecycleNode
    * @param start_stop_flag Whether streaming is requested
    * @param initialized_flag Whether streaming is ready
    * @param camera_type Camera position/type (payload index)
+   * @param bandwidth Bandwidth quality (0=Low, 1=Medium, 2=High)
    */
-  void write_video_streaming_status(bool start_stop_flag, bool initialized_flag, uint8_t camera_type);
+  void write_video_streaming_status(bool start_stop_flag, bool initialized_flag, uint8_t camera_type, uint8_t bandwidth);
 
 #ifdef HAS_IVAQ_FINDER_MSGS
   /**

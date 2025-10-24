@@ -111,7 +111,7 @@ LiveviewModule::on_configure(const rclcpp_lifecycle::State &state)
   }
   
   // Initialize JSON status file (streaming not ready yet)
-  write_video_streaming_status(false, false, video_streaming_camera_type_);
+  write_video_streaming_status(false, false, video_streaming_camera_type_, video_streaming_bandwidth_);
   RCLCPP_INFO(get_logger(), "JSON status file path: %s", json_status_file_path_.c_str());
   
   if (auto_keyframe_enabled_)
@@ -797,7 +797,7 @@ bool LiveviewModule::start_rtp_pipeline()
   // Use payload_index_ (just updated from request) instead of video_streaming_camera_type_ (may be stale)
   if (video_streaming_requested_)
   {
-    write_video_streaming_status(true, true, static_cast<uint8_t>(payload_index_));
+    write_video_streaming_status(true, true, static_cast<uint8_t>(payload_index_), video_streaming_bandwidth_);
     RCLCPP_INFO(get_logger(), "📺 Video streaming initialized - webapp notified with camera_type=%d", payload_index_);
   }
   
@@ -818,7 +818,7 @@ void LiveviewModule::stop_rtp_pipeline()
   udpsink_ = nullptr;
   
   // Update webapp status: streaming stopped
-  write_video_streaming_status(false, false, video_streaming_camera_type_);
+  write_video_streaming_status(false, false, video_streaming_camera_type_, video_streaming_bandwidth_);
   RCLCPP_INFO(get_logger(), "📺 Video streaming stopped - webapp notified");
 }
 
@@ -1071,7 +1071,7 @@ LiveviewModule::auto_request_keyframe_callback()
 // ===== Video Streaming Control (Webapp Integration) =====
 
 void
-LiveviewModule::write_video_streaming_status(bool start_stop_flag, bool initialized_flag, uint8_t camera_type)
+LiveviewModule::write_video_streaming_status(bool start_stop_flag, bool initialized_flag, uint8_t camera_type, uint8_t bandwidth)
 {
   try
   {
@@ -1087,11 +1087,12 @@ LiveviewModule::write_video_streaming_status(bool start_stop_flag, bool initiali
       file << "{\n";
       file << "  \"video_streaming_start_stop_flag\": " << (start_stop_flag ? "true" : "false") << ",\n";
       file << "  \"video_streaming_initialized_flag\": " << (initialized_flag ? "true" : "false") << ",\n";
+      file << "  \"video_streaming_bandwidth\": " << static_cast<int>(bandwidth) << ",\n";
       file << "  \"video_streaming_camera_type\": " << static_cast<int>(camera_type) << "\n";
       file << "}\n";
       file.close();
-      RCLCPP_INFO(get_logger(), "Updated video streaming status: start_stop=%s, initialized=%s, camera_type=%d",
-                   start_stop_flag ? "true" : "false", initialized_flag ? "true" : "false", camera_type);
+      RCLCPP_INFO(get_logger(), "Updated video streaming status: start_stop=%s, initialized=%s, bandwidth=%d, camera_type=%d",
+                   start_stop_flag ? "true" : "false", initialized_flag ? "true" : "false", bandwidth, camera_type);
     }
     else
     {
@@ -1111,17 +1112,40 @@ LiveviewModule::on_video_streaming_control(
 {
   video_streaming_requested_ = msg->video_streaming_start_stop_flag;
   video_streaming_camera_type_ = msg->video_streaming_camera_type;
+  video_streaming_bandwidth_ = msg->video_streaming_bandwidth;
   
+  // Apply bandwidth-specific settings based on camera type
+  // FPV (7): Low=20fps, Med=15fps, High=5fps
+  // H20 (1): Low=15fps, Med=10fps, High=5fps
+  // All use keyframe_interval=0.05s for GOP structure
   if (msg->video_streaming_start_stop_flag)
   {
-    RCLCPP_INFO(get_logger(), "📺 Webapp requested video streaming START (camera_type=%d)", 
-                msg->video_streaming_camera_type);
+    // Determine FPS based on camera type and bandwidth
+    bool is_fpv = (msg->video_streaming_camera_type == 7);  // FPV = 7
+    if (msg->video_streaming_bandwidth == 0)  // LOW
+    {
+      keyframe_request_interval_ = 0.05;
+      direct_rtp_fps_ = is_fpv ? 20.0 : 15.0;
+    }
+    else if (msg->video_streaming_bandwidth == 1)  // MEDIUM
+    {
+      keyframe_request_interval_ = 0.05;
+      direct_rtp_fps_ = is_fpv ? 15.0 : 10.0;
+    }
+    else  // HIGH (2) or default
+    {
+      keyframe_request_interval_ = 0.05;
+      direct_rtp_fps_ = 5.0;  // Same for both FPV and H20
+    }
+    
+    RCLCPP_INFO(get_logger(), "📺 Webapp requested video streaming START (camera_type=%d, bandwidth=%d, fps=%.1f, keyframe_interval=%.3fs)", 
+                msg->video_streaming_camera_type, msg->video_streaming_bandwidth, direct_rtp_fps_, keyframe_request_interval_);
     
     // If RTP is already running, just update status
     if (gst_pipeline_)
     {
       RCLCPP_INFO(get_logger(), "RTP pipeline already running - updating status to initialized");
-      write_video_streaming_status(true, true, video_streaming_camera_type_);
+      write_video_streaming_status(true, true, video_streaming_camera_type_, video_streaming_bandwidth_);
     }
     else if (!is_streaming_active_)
     {
@@ -1149,7 +1173,7 @@ LiveviewModule::on_video_streaming_control(
       }
       else
       {
-        write_video_streaming_status(false, false, video_streaming_camera_type_);
+        write_video_streaming_status(false, false, video_streaming_camera_type_, video_streaming_bandwidth_);
         RCLCPP_ERROR(get_logger(), "❌ Failed to start camera streaming via webapp");
       }
     }
