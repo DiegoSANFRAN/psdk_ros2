@@ -1125,17 +1125,17 @@ LiveviewModule::on_video_streaming_control(
     if (msg->video_streaming_bandwidth == 0)  // LOW
     {
       keyframe_request_interval_ = 0.05;
-      direct_rtp_fps_ = is_fpv ? 20.0 : 15.0;
+      direct_rtp_fps_ = 5.0;  // Same for both FPV and H20
     }
     else if (msg->video_streaming_bandwidth == 1)  // MEDIUM
     {
       keyframe_request_interval_ = 0.05;
-      direct_rtp_fps_ = is_fpv ? 15.0 : 10.0;
+      direct_rtp_fps_ = is_fpv ? 10.0 : 10.0; //FPV was in 15 but lowered to 10 because the output from the drone seemed to be 17fps, similar to HIGH
     }
     else  // HIGH (2) or default
     {
       keyframe_request_interval_ = 0.05;
-      direct_rtp_fps_ = 5.0;  // Same for both FPV and H20
+      direct_rtp_fps_ = is_fpv ? 20.0 : 15.0;
     }
     
     RCLCPP_INFO(get_logger(), "📺 Webapp requested video streaming START (camera_type=%d, bandwidth=%d, fps=%.1f, keyframe_interval=%.3fs)", 
