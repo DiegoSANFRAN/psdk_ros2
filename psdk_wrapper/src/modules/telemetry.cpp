@@ -1584,8 +1584,9 @@ TelemetryModule::home_point_callback(const uint8_t *data, uint16_t data_size,
           *reinterpret_cast<const T_DjiFcSubscriptionHomePointInfo *>(data));
   sensor_msgs::msg::NavSatFix home_point_msg;
   home_point_msg.header.stamp = this->get_clock()->now();
-  home_point_msg.longitude = home_point->longitude;
-  home_point_msg.latitude = home_point->latitude;
+  // DJI unit is rad. Transform it to deg (same as gps_fused)
+  home_point_msg.longitude = psdk_utils::rad_to_deg(home_point->longitude);
+  home_point_msg.latitude = psdk_utils::rad_to_deg(home_point->latitude);
   home_point_pub_->publish(home_point_msg);
   return DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS;
 }
