@@ -433,7 +433,7 @@ LiveviewModule::camera_setup_streaming_cb(
   if (request->start_stop)
   {
     RCLCPP_INFO(get_logger(), "Starting streaming...");
-    bool streaming_result;
+    bool streaming_result = false;  // Initialize to false for unsupported camera types
     if (payload_index_ == DJI_LIVEVIEW_CAMERA_POSITION_NO_1)
     {
       char main_camera_name[] = "MAIN_CAMERA";
@@ -447,6 +447,14 @@ LiveviewModule::camera_setup_streaming_cb(
       streaming_result = start_camera_stream(&c_publish_fpv_streaming_callback,
                                              &fpv_camera_name, payload_index_,
                                              selected_camera_source_);
+    }
+    else
+    {
+      RCLCPP_ERROR(get_logger(), 
+                   "❌ Unsupported camera type: %d. Only MAIN/H20 (1) and FPV (7) are supported.",
+                   payload_index_);
+      response->success = false;
+      return;
     }
 
     if (streaming_result)
@@ -1114,14 +1122,38 @@ LiveviewModule::on_video_streaming_control(
   video_streaming_camera_type_ = msg->video_streaming_camera_type;
   video_streaming_bandwidth_ = msg->video_streaming_bandwidth;
   
+  // Camera source handling:
+  // - If webapp specifies a source (>0), use it
+  // - If source is 0 (DEFAULT), auto-select based on camera type
+  uint8_t camera_source = msg->video_streaming_camera_source;
+  if (camera_source == 0)
+  {
+    // Auto-select default camera source based on camera type
+    switch (msg->video_streaming_camera_type)
+    {
+      case 7:  // FPV - always uses default
+        camera_source = 0;  // DJI_LIVEVIEW_CAMERA_SOURCE_DEFAULT
+        break;
+      case 1:  // Main camera / H20 - default to wide lens
+        camera_source = 1;  // DJI_LIVEVIEW_CAMERA_SOURCE_H20_WIDE
+        RCLCPP_INFO(get_logger(), "🔍 H20 camera: auto-selecting WIDE lens (source=1)");
+        break;
+      default:
+        camera_source = 0;  // Default for other cameras
+        break;
+    }
+  }
+  
   // Apply bandwidth-specific settings based on camera type
-  // FPV (7): Low=20fps, Med=15fps, High=5fps
-  // H20 (1): Low=15fps, Med=10fps, High=5fps
+  // FPV (7): Low=5fps, Med=12fps, High=20fps
+  // H20 (1): Low=5fps, Med=10fps, High=15fps
   // All use keyframe_interval=0.05s for GOP structure
   if (msg->video_streaming_start_stop_flag)
   {
     // Determine FPS based on camera type and bandwidth
     bool is_fpv = (msg->video_streaming_camera_type == 7);  // FPV = 7
+    bool is_h20 = (msg->video_streaming_camera_type == 1);  // Main/H20 = 1
+    
     if (msg->video_streaming_bandwidth == 0)  // LOW
     {
       keyframe_request_interval_ = 0.05;
@@ -1130,16 +1162,57 @@ LiveviewModule::on_video_streaming_control(
     else if (msg->video_streaming_bandwidth == 1)  // MEDIUM
     {
       keyframe_request_interval_ = 0.05;
-      direct_rtp_fps_ = is_fpv ? 12.0 : 10.0; //FPV was in 15 but lowered to 12 because the output from the drone seemed to be 17fps, similar to HIGH
+      if (is_fpv)
+        direct_rtp_fps_ = 12.0;
+      else if (is_h20)
+        direct_rtp_fps_ = 10.0;  // H20 might need adjustment based on testing
+      else
+        direct_rtp_fps_ = 10.0;  // Default for other cameras
     }
     else  // HIGH (2) or default
     {
       keyframe_request_interval_ = 0.05;
-      direct_rtp_fps_ = is_fpv ? 20.0 : 15.0;
+      if (is_fpv)
+        direct_rtp_fps_ = 20.0;
+      else if (is_h20)
+        direct_rtp_fps_ = 15.0;  // H20 might need adjustment based on testing
+      else
+        direct_rtp_fps_ = 15.0;  // Default for other cameras
     }
     
-    RCLCPP_INFO(get_logger(), "📺 Webapp requested video streaming START (camera_type=%d, bandwidth=%d, fps=%.1f, keyframe_interval=%.3fs)", 
-                msg->video_streaming_camera_type, msg->video_streaming_bandwidth, direct_rtp_fps_, keyframe_request_interval_);
+    // Log camera info with source details
+    const char* camera_name = "UNKNOWN";
+    const char* source_name = "DEFAULT";
+    switch (msg->video_streaming_camera_type)
+    {
+      case 1: camera_name = "MAIN/H20"; break;
+      case 2: camera_name = "VICE"; break;
+      case 3: camera_name = "TOP"; break;
+      case 7: camera_name = "FPV"; break;
+    }
+    switch (camera_source)
+    {
+      case 0: source_name = "DEFAULT"; break;
+      case 1: source_name = "H20_WIDE"; break;
+      case 2: source_name = "H20_ZOOM"; break;
+      case 3: source_name = "H20T_IR"; break;
+    }
+    
+    RCLCPP_INFO(get_logger(), 
+                "📺 Webapp requested video streaming START:\n"
+                "   Camera: %s (type=%d)\n"
+                "   Source: %s (source=%d)\n"
+                "   Bandwidth: %s (level=%d)\n"
+                "   Settings: fps=%.1f, keyframe_interval=%.3fs",
+                camera_name, msg->video_streaming_camera_type,
+                source_name, camera_source,
+                msg->video_streaming_bandwidth == 0 ? "LOW" : 
+                  (msg->video_streaming_bandwidth == 1 ? "MEDIUM" : "HIGH"),
+                msg->video_streaming_bandwidth,
+                direct_rtp_fps_, keyframe_request_interval_);
+    
+    // Update the selected camera source for use in streaming
+    selected_camera_source_ = static_cast<E_DjiLiveViewCameraSource>(camera_source);
     
     // If RTP is already running, just update status
     if (gst_pipeline_)
@@ -1157,13 +1230,14 @@ LiveviewModule::on_video_streaming_control(
       
       // Use the camera type from the message instead of payload_index_
       request->payload_index = static_cast<E_DjiLiveViewCameraPosition>(msg->video_streaming_camera_type);
-      request->camera_source = selected_camera_source_;
+      request->camera_source = static_cast<uint8_t>(selected_camera_source_);
       // CRITICAL: Always request encoded H264 for direct RTP streaming (no decoding)
       // When direct_rtp_enabled_ is true, we need raw H264 to feed GStreamer
       request->decoded_output = false;  // Force encoded output for RTP pipeline
       request->start_stop = true;
       
-      RCLCPP_INFO(get_logger(), "📹 Requesting encoded H264 stream (decoded_output=false) for RTP pipeline");
+      RCLCPP_INFO(get_logger(), "📹 Requesting encoded H264 stream (payload=%d, source=%d, decoded=false)", 
+                  request->payload_index, request->camera_source);
       
       camera_setup_streaming_cb(request, response);
       
@@ -1186,8 +1260,8 @@ LiveviewModule::on_video_streaming_control(
     auto request = std::make_shared<CameraSetupStreaming::Request>();
     auto response = std::make_shared<CameraSetupStreaming::Response>();
     
-    request->payload_index = static_cast<E_DjiLiveViewCameraPosition>(video_streaming_camera_type_);
-    request->camera_source = selected_camera_source_;
+    request->payload_index = payload_index_;  // Use currently active camera
+    request->camera_source = static_cast<uint8_t>(selected_camera_source_);
     request->decoded_output = false;  // Match the start request
     request->start_stop = false;
     
