@@ -16,6 +16,40 @@
  */
 
 #include "psdk_wrapper/modules/telemetry.hpp"
+
+#include <algorithm>
+#include <iomanip>
+#include <sstream>
+
+namespace
+{
+std::string bytes_to_hex_preview(const uint8_t *data, size_t size,
+                                 size_t max_bytes = 48)
+{
+  if (data == nullptr || size == 0)
+  {
+    return "<empty>";
+  }
+
+  const size_t bytes_to_show = std::min(size, max_bytes);
+  std::ostringstream stream;
+  stream << std::hex << std::setfill('0');
+  for (size_t index = 0; index < bytes_to_show; ++index)
+  {
+    stream << std::setw(2) << static_cast<unsigned int>(data[index]);
+    if (index + 1 < bytes_to_show)
+    {
+      stream << ' ';
+    }
+  }
+  if (size > bytes_to_show)
+  {
+    stream << " ...";
+  }
+  return stream.str();
+}
+}  // namespace
+
 namespace psdk_ros2
 {
 TelemetryModule::TelemetryModule(const std::string &name)
@@ -1267,8 +1301,31 @@ T_DjiReturnCode
 TelemetryModule::rc_callback(const uint8_t *data, uint16_t data_size,
                              const T_DjiDataTimestamp *timestamp)
 {
-  (void)data_size;
   (void)timestamp;
+  const size_t expected_size = sizeof(T_DjiFcSubscriptionRC);
+  const size_t received_size = static_cast<size_t>(data_size);
+
+  if (received_size < expected_size)
+  {
+    RCLCPP_ERROR_THROTTLE(
+        get_logger(), *get_clock(), 5000,
+        "RC payload too small: received %zu bytes, expected %zu. "
+        "Dropping frame. Hex preview: %s",
+        received_size, expected_size,
+        bytes_to_hex_preview(data, received_size).c_str());
+    return DJI_ERROR_SYSTEM_MODULE_CODE_UNKNOWN;
+  }
+
+  if (received_size > expected_size)
+  {
+    RCLCPP_WARN_THROTTLE(
+        get_logger(), *get_clock(), 5000,
+        "RC payload larger than expected: received %zu bytes, expected %zu. "
+        "Extra tail bytes may indicate additional RC fields. Hex preview: %s",
+        received_size, expected_size,
+        bytes_to_hex_preview(data, received_size).c_str());
+  }
+
   std::unique_ptr<T_DjiFcSubscriptionRC> rc_data =
       std::make_unique<T_DjiFcSubscriptionRC>(
           *reinterpret_cast<const T_DjiFcSubscriptionRC *>(data));
@@ -1321,8 +1378,31 @@ TelemetryModule::rc_connection_status_callback(
     const uint8_t *data, uint16_t data_size,
     const T_DjiDataTimestamp *timestamp)
 {
-  (void)data_size;
   (void)timestamp;
+  const size_t expected_size = sizeof(T_DjiFcSubscriptionRCWithFlagData);
+  const size_t received_size = static_cast<size_t>(data_size);
+
+  if (received_size < expected_size)
+  {
+    RCLCPP_ERROR_THROTTLE(
+        get_logger(), *get_clock(), 5000,
+        "RC_WITH_FLAG payload too small: received %zu bytes, expected %zu. "
+        "Dropping frame. Hex preview: %s",
+        received_size, expected_size,
+        bytes_to_hex_preview(data, received_size).c_str());
+    return DJI_ERROR_SYSTEM_MODULE_CODE_UNKNOWN;
+  }
+
+  if (received_size > expected_size)
+  {
+    RCLCPP_WARN_THROTTLE(
+        get_logger(), *get_clock(), 5000,
+        "RC_WITH_FLAG payload larger than expected: received %zu bytes, expected %zu. "
+        "Extra tail bytes may indicate additional RC status fields. Hex preview: %s",
+        received_size, expected_size,
+        bytes_to_hex_preview(data, received_size).c_str());
+  }
+
   std::unique_ptr<T_DjiFcSubscriptionRCWithFlagData> rc_connection_data =
       std::make_unique<T_DjiFcSubscriptionRCWithFlagData>(
           *reinterpret_cast<const T_DjiFcSubscriptionRCWithFlagData *>(data));
