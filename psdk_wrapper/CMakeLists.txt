@@ -41,24 +41,38 @@ message(STATUS "Found ivaq_finder_search_msgs - enabling webapp control")
 add_definitions(-DHAS_IVAQ_FINDER_MSGS)
 list(APPEND dependencies ivaq_finder_search_msgs)
 
-# FetchContent module
-include(FetchContent)
+# Allow using a pre-downloaded local Payload-SDK checkout to avoid network stalls.
+set(PSDK_PATH "" CACHE PATH "Path to a local DJI Payload-SDK checkout")
 
-# Declare the content to fetch
-FetchContent_Declare(
-  Payload_SDK
-  GIT_REPOSITORY https://github.com/dji-sdk/Payload-SDK.git
-  GIT_TAG 3.8.1
-)
+if(PSDK_PATH)
+  message(STATUS "Using local Payload-SDK from PSDK_PATH: ${PSDK_PATH}")
+else()
+  # FetchContent module
+  include(FetchContent)
 
-FetchContent_GetProperties(Payload_SDK)
-if(NOT Payload_SDK_POPULATED)
-  FetchContent_Populate(Payload_SDK)
-  message(STATUS "Payload_SDK_SOURCE_DIR: ${payload_sdk_SOURCE_DIR}")
+  # Declare the content to fetch
+  FetchContent_Declare(
+    Payload_SDK
+    GIT_REPOSITORY https://github.com/dji-sdk/Payload-SDK.git
+    GIT_TAG 3.8.1
+    GIT_SHALLOW TRUE
+    GIT_PROGRESS TRUE
+  )
+
+  FetchContent_GetProperties(Payload_SDK)
+  if(NOT Payload_SDK_POPULATED)
+    message(STATUS "Fetching Payload-SDK from GitHub (this may take a while on slow links)...")
+    FetchContent_Populate(Payload_SDK)
+    message(STATUS "Payload_SDK_SOURCE_DIR: ${payload_sdk_SOURCE_DIR}")
+  endif()
+
+  # Set the path to the fetched content
+  set(PSDK_PATH ${payload_sdk_SOURCE_DIR})
 endif()
 
-# Set the path to the fetched content
-set(PSDK_PATH ${payload_sdk_SOURCE_DIR})
+if(NOT EXISTS "${PSDK_PATH}/psdk_lib/include")
+  message(FATAL_ERROR "Invalid PSDK_PATH '${PSDK_PATH}'. Expected '${PSDK_PATH}/psdk_lib/include' to exist.")
+endif()
 
 message(STATUS "PSDK_PATH: ${PSDK_PATH}")
 
