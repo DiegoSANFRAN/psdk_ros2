@@ -84,6 +84,7 @@ PSDKWrapper::PSDKWrapper(const std::string &node_name)
   declare_parameter("data_frequency.flight_status", 1);
   declare_parameter("data_frequency.battery_level", 1);
   declare_parameter("data_frequency.control_information", 1);
+  declare_parameter("data_frequency.avoid_data", 0);
   declare_parameter("data_frequency.esc_data_frequency", 1);
   declare_parameter("num_of_initialization_retries", 1);
 
@@ -510,6 +511,19 @@ PSDKWrapper::load_parameters()
       "data_frequency.control_information",
       telemetry_module_->params_.control_information_frequency,
       CONTROL_DATA_TOPICS_MAX_FREQ);
+  get_parameter("data_frequency.avoid_data",
+                telemetry_module_->params_.avoid_data_frequency);
+  if (telemetry_module_->params_.avoid_data_frequency <= 0)
+  {
+    telemetry_module_->params_.avoid_data_frequency =
+        telemetry_module_->params_.control_information_frequency;
+  }
+  else
+  {
+    get_and_validate_frequency("data_frequency.avoid_data",
+                               telemetry_module_->params_.avoid_data_frequency,
+                               CONTROL_DATA_TOPICS_MAX_FREQ);
+  }
 }
 
 bool

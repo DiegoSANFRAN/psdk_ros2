@@ -2530,7 +2530,7 @@ TelemetryModule::subscribe_psdk_topics()
 
     return_code = DjiFcSubscription_SubscribeTopic(
         DJI_FC_SUBSCRIPTION_TOPIC_AVOID_DATA,
-        get_frequency(params_.control_information_frequency),
+        get_frequency(params_.avoid_data_frequency),
         c_avoid_data_callback);
 
     if (return_code != DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS)

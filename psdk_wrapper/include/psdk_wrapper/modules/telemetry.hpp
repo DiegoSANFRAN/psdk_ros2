@@ -308,6 +308,7 @@ class TelemetryModule : public rclcpp_lifecycle::LifecycleNode
     int flight_status_frequency;
     int battery_level_frequency;
     int control_information_frequency;
+    int avoid_data_frequency;
     int esc_data_frequency;
   };
   struct CopterState
