@@ -1325,14 +1325,6 @@ TelemetryModule::rc_callback(const uint8_t *data, uint16_t data_size,
         received_size, expected_size,
         bytes_to_hex_preview(data, received_size).c_str());
   }
-  else
-  {
-    RCLCPP_INFO_THROTTLE(
-        get_logger(), *get_clock(), 5000,
-        "RC payload size matches expected: received %zu bytes.",
-        received_size);
-  }
-
   std::unique_ptr<T_DjiFcSubscriptionRC> rc_data =
       std::make_unique<T_DjiFcSubscriptionRC>(
           *reinterpret_cast<const T_DjiFcSubscriptionRC *>(data));
@@ -1409,14 +1401,6 @@ TelemetryModule::rc_connection_status_callback(
         received_size, expected_size,
         bytes_to_hex_preview(data, received_size).c_str());
   }
-  else
-  {
-    RCLCPP_INFO_THROTTLE(
-        get_logger(), *get_clock(), 5000,
-        "RC_WITH_FLAG payload size matches expected: received %zu bytes.",
-        received_size);
-  }
-
   std::unique_ptr<T_DjiFcSubscriptionRCWithFlagData> rc_connection_data =
       std::make_unique<T_DjiFcSubscriptionRCWithFlagData>(
           *reinterpret_cast<const T_DjiFcSubscriptionRCWithFlagData *>(data));

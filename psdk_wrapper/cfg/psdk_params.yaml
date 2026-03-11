@@ -51,7 +51,7 @@
         flight_status: 0
         battery_level: 1
         control_information: 10
-        avoid_data: 50
+        avoid_data: 10
         esc_data_frequency: 1
 
       # Liveview module parameters
