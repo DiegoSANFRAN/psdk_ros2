@@ -10,9 +10,10 @@
 from launch import LaunchDescription
 from launch_ros.substitutions import FindPackageShare
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
-from launch.actions import EmitEvent, DeclareLaunchArgument
+from launch.actions import EmitEvent, DeclareLaunchArgument, RegisterEventHandler
 from launch_ros.actions import LifecycleNode
 from launch_ros.events.lifecycle import ChangeState
+from launch_ros.event_handlers import OnStateTransition
 
 import lifecycle_msgs.msg
 import launch
@@ -92,11 +93,21 @@ def generate_launch_description():
         )
     )
 
-    # Activate lifecycle node
-    wrapper_activate_trans_event = EmitEvent(
-        event=ChangeState(
-            lifecycle_node_matcher=launch.events.matches_action(wrapper_node),
-            transition_id=lifecycle_msgs.msg.Transition.TRANSITION_ACTIVATE,
+    # Activate only after configure completed successfully and the node reached
+    # the inactive state. Emitting activate immediately can race and leave the
+    # lifecycle node stuck inactive at startup.
+    wrapper_activate_trans_event = RegisterEventHandler(
+        OnStateTransition(
+            target_lifecycle_node=wrapper_node,
+            goal_state='inactive',
+            entities=[
+                EmitEvent(
+                    event=ChangeState(
+                        lifecycle_node_matcher=launch.events.matches_action(wrapper_node),
+                        transition_id=lifecycle_msgs.msg.Transition.TRANSITION_ACTIVATE,
+                    )
+                )
+            ],
         )
     )
 
