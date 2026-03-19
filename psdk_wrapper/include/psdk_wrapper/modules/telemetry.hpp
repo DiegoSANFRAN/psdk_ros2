@@ -1096,6 +1096,8 @@ class TelemetryModule : public rclcpp_lifecycle::LifecycleNode
   rclcpp_lifecycle::LifecyclePublisher<
       geometry_msgs::msg::Vector3Stamped>::SharedPtr gimbal_angles_pub_;
   rclcpp_lifecycle::LifecyclePublisher<
+      geometry_msgs::msg::Vector3Stamped>::SharedPtr gimbal_angles_body_pub_;
+  rclcpp_lifecycle::LifecyclePublisher<
       psdk_interfaces::msg::GimbalStatus>::SharedPtr gimbal_status_pub_;
 
   /* ROS 2 services */

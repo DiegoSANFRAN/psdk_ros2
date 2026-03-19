@@ -120,6 +120,9 @@ TelemetryModule::on_configure(const rclcpp_lifecycle::State &state)
       create_publisher<psdk_interfaces::msg::EscData>("psdk_ros2/esc_data", 1);
   gimbal_angles_pub_ = create_publisher<geometry_msgs::msg::Vector3Stamped>(
       "psdk_ros2/gimbal_angles", 10);
+  gimbal_angles_body_pub_ =
+      create_publisher<geometry_msgs::msg::Vector3Stamped>(
+          "psdk_ros2/gimbal_angles_body", 10);
   gimbal_status_pub_ = create_publisher<psdk_interfaces::msg::GimbalStatus>(
       "psdk_ros2/gimbal_status", 10);
   flight_status_pub_ = create_publisher<psdk_interfaces::msg::FlightStatus>(
@@ -246,6 +249,7 @@ TelemetryModule::on_activate(const rclcpp_lifecycle::State &state)
   altitude_sl_pub_->on_activate();
   altitude_barometric_pub_->on_activate();
   gimbal_angles_pub_->on_activate();
+  gimbal_angles_body_pub_->on_activate();
   gimbal_status_pub_->on_activate();
 
   return CallbackReturn::SUCCESS;
@@ -298,6 +302,7 @@ TelemetryModule::on_deactivate(const rclcpp_lifecycle::State &state)
   altitude_sl_pub_->on_deactivate();
   altitude_barometric_pub_->on_deactivate();
   gimbal_angles_pub_->on_deactivate();
+  gimbal_angles_body_pub_->on_deactivate();
   gimbal_status_pub_->on_deactivate();
 
   return CallbackReturn::SUCCESS;
@@ -357,6 +362,7 @@ TelemetryModule::on_cleanup(const rclcpp_lifecycle::State &state)
   altitude_sl_pub_.reset();
   altitude_barometric_pub_.reset();
   gimbal_angles_pub_.reset();
+  gimbal_angles_body_pub_.reset();
   gimbal_status_pub_.reset();
 
   // Reset global variables
@@ -1451,6 +1457,33 @@ TelemetryModule::gimbal_angles_callback(const uint8_t *data, uint16_t data_size,
   }
 
   gimbal_angles_pub_->publish(gimbal_angles_msg);
+
+  geometry_msgs::msg::Vector3Stamped gimbal_angles_body_msg = gimbal_angles_msg;
+  gimbal_angles_body_msg.header.frame_id = params_.body_frame;
+
+  {
+    std::shared_lock<std::shared_mutex> lock(current_state_mutex_);
+    tf2::Matrix3x3 rotation_mat(current_state_.attitude);
+    double current_roll;
+    double current_pitch;
+    double current_yaw;
+    rotation_mat.getRPY(current_roll, current_pitch, current_yaw);
+    (void)current_roll;
+    (void)current_pitch;
+    gimbal_angles_body_msg.vector.z =
+        gimbal_angles_msg.vector.z - current_yaw;
+  }
+
+  if (gimbal_angles_body_msg.vector.z < -psdk_utils::C_PI)
+  {
+    gimbal_angles_body_msg.vector.z += 2 * psdk_utils::C_PI;
+  }
+  else if (gimbal_angles_body_msg.vector.z > psdk_utils::C_PI)
+  {
+    gimbal_angles_body_msg.vector.z -= 2 * psdk_utils::C_PI;
+  }
+
+  gimbal_angles_body_pub_->publish(gimbal_angles_body_msg);
   if (params_.publish_transforms)
   {
     /* Save gimbal angles for TF publishing and publish dynamic transform */
