@@ -39,7 +39,7 @@
         attitude: 10
         acceleration: 10
         velocity: 10
-        angular_velocity: 10
+        angular_velocity: 5
         position: 10
         altitude: 10
         gps_fused_position: 10
